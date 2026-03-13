@@ -1,0 +1,85 @@
+@import "tailwindcss";
+
+:root {
+  --background: #fafafa;
+  --foreground: #1a1a2e;
+  --primary: #16213e;
+  --accent: #0f3460;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+  --card: #ffffff;
+  --success: #059669;
+  --warning: #d97706;
+  --error: #dc2626;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-accent: var(--accent);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-card: var(--card);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-error: var(--error);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 3px;
+}
+
+/* Verdict HTML view */
+.verdict-html p {
+  margin-top: 0.75em;
+  margin-bottom: 0.75em;
+  line-height: 1.7;
+}
+.verdict-html p:first-child {
+  margin-top: 0;
+}
+.verdict-html p:last-child {
+  margin-bottom: 0;
+}
+.verdict-html strong {
+  font-weight: 600;
+}
+.verdict-html table {
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+.verdict-html td, .verdict-html th {
+  border: 1px solid var(--border);
+  padding: 0.5rem;
+}
+.verdict-html th {
+  background: var(--border);
+}
+
+/* Markdown-like content in AI overview */
+.ai-overview p {
+  margin-bottom: 0.75rem;
+}
+.ai-overview ul, .ai-overview ol {
+  margin-bottom: 0.75rem;
+  padding-left: 1.5rem;
+}
+.ai-overview li {
+  margin-bottom: 0.25rem;
+}
