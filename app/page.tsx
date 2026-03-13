@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   SearchBar,
@@ -30,7 +30,15 @@ export default function SearchPage() {
   const [hasResults, setHasResults] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(15);
+  const [verdictCount, setVerdictCount] = useState<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    fetch("/api/stats")
+      .then((r) => r.json())
+      .then((d) => setVerdictCount(d.verdict_count))
+      .catch(() => {});
+  }, []);
 
   const handleSearch = useCallback(
     async (query: string, filters: SearchFilters, answerModel: string) => {
@@ -140,7 +148,11 @@ export default function SearchPage() {
               Wyszukiwarka orzeczeń KIO
             </h1>
             <p className="text-sm text-muted">
-              Przeszukaj bazę orzeczeń Krajowej Izby Odwoławczej
+              Przeszukaj{" "}
+              {verdictCount !== null
+                ? `${verdictCount.toLocaleString("pl-PL")} orzeczeń`
+                : "bazę orzeczeń"}{" "}
+              Krajowej Izby Odwoławczej
             </p>
           </div>
         )}
