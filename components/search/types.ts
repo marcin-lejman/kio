@@ -49,6 +49,7 @@ export interface DebugData {
   fts_results?: { sygnatura: string; section_label: string; score: number; chunk_text_preview: string }[];
   vector_results?: { sygnatura: string; section_label: string; score: number; chunk_text_preview: string }[];
   fused_results?: { sygnatura: string; section_label: string; score: number; source: string }[];
+  reranked_results?: { sygnatura: string; section_label: string; score: number; llm_score: number; original_rank: number }[];
 }
 
 export const ANSWER_MODELS = [

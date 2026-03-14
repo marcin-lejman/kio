@@ -289,6 +289,113 @@ function reciprocalRankFusion(
 }
 
 // ============================================================
+// Layer 2.5: LLM Reranking
+// ============================================================
+
+const RERANKING_PROMPT = `Oceń trafność każdego fragmentu orzeczenia KIO w odniesieniu do zapytania użytkownika.
+Skup się na tym, czy fragment MERYTORYCZNIE dotyczy zagadnienia z zapytania — nie wystarczy samo wystąpienie słów kluczowych.
+
+WAŻNE: Fragmenty orzeczeń KIO prawie zawsze dotyczą zamówień publicznych, więc pewien poziom powiązania jest naturalny. Oceniaj na tle KONKRETNEGO pytania użytkownika.
+
+Skala 0-10:
+- 0-1: zupełnie niezwiązany — fragment dotyczy całkowicie innego tematu
+- 2-3: bardzo luźno powiązany — ten sam obszar prawa, ale inne zagadnienie
+- 4-5: częściowo powiązany — dotyczy pokrewnego zagadnienia, wspomina temat pytania kontekstowo
+- 6-7: powiązany — dotyczy tego samego zagadnienia prawnego, ale inny aspekt lub stan faktyczny
+- 8-9: bezpośrednio trafny — omawia dokładnie zagadnienie z pytania
+- 10: idealnie odpowiada — fragment wprost rozstrzyga kwestię postawioną w pytaniu
+
+Większość fragmentów powinna otrzymać ocenę 3-7. Ocena 0 to absolutna ostateczność (np. fragment o robotach budowlanych przy pytaniu o usługi medyczne).
+
+Odpowiedz WYŁĄCZNIE tablicą JSON z ocenami, np. [7, 4, 8, 3, ...]`;
+
+async function rerankChunks(
+  userQuery: string,
+  chunks: ChunkResult[],
+): Promise<{ reranked: ChunkResult[]; cost: CostEntry; scores: number[] }> {
+  // Not enough chunks to bother reranking
+  if (chunks.length < 5) {
+    return {
+      reranked: chunks,
+      cost: { layer: "reranking", model: MODELS.QUERY_UNDERSTANDING, input_tokens: 0, output_tokens: 0, cost_usd: 0, latency_ms: 0 },
+      scores: chunks.map(() => -1),
+    };
+  }
+
+  const top = chunks.slice(0, 30);
+  const fragmentList = top
+    .map((c, i) => {
+      const preview = c.chunk_text.slice(0, 400);
+      const label = c.sygnatura.includes("|")
+        ? c.sygnatura.split("|").map(s => s.trim()).join(", ")
+        : c.sygnatura;
+      return `${i + 1}. [${label}] (${c.section_label}): ${preview}`;
+    })
+    .join("\n\n");
+
+  try {
+    const response = await chatCompletion(
+      [
+        { role: "system", content: RERANKING_PROMPT },
+        { role: "user", content: `Zapytanie: "${userQuery}"\n\nFragmenty (${top.length}):\n\n${fragmentList}` },
+      ],
+      MODELS.QUERY_UNDERSTANDING,
+      { temperature: 0, max_tokens: 256 }
+    );
+
+    const cost: CostEntry = {
+      layer: "reranking",
+      model: response.model,
+      input_tokens: response.input_tokens,
+      output_tokens: response.output_tokens,
+      cost_usd: response.cost_usd,
+      latency_ms: response.latency_ms,
+    };
+
+    // Parse scores array from LLM response
+    const cleaned = response.content.replace(/```json?\s*/g, "").replace(/```/g, "").trim();
+    const scores = JSON.parse(cleaned) as number[];
+
+    // Validate: must be an array with the right length
+    if (!Array.isArray(scores) || scores.length !== top.length) {
+      console.warn(`Reranking: expected ${top.length} scores, got ${scores.length}. Falling back to RRF order.`);
+      return { reranked: chunks, cost, scores: chunks.map(() => -1) };
+    }
+
+    // Blend: weighted combination of RRF rank score and LLM relevance
+    // RRF scores are tiny (~0.01-0.03), LLM scores are 0-10.
+    // Normalize both to 0-1 range, then weight: 30% RRF + 70% LLM
+    const maxRrf = Math.max(...top.map(c => c.score));
+    const reranked = top.map((chunk, i) => {
+      const llmScore = Math.max(0, Math.min(10, scores[i] ?? 0));
+      const rrfNorm = maxRrf > 0 ? chunk.score / maxRrf : 0;
+      const llmNorm = llmScore / 10;
+      return {
+        ...chunk,
+        score: 0.3 * rrfNorm + 0.7 * llmNorm,
+      };
+    });
+
+    // Sort by blended score descending
+    reranked.sort((a, b) => b.score - a.score);
+
+    // Append any remaining chunks (31+) that weren't reranked — give them a low blended score
+    const remaining = chunks.slice(30).map(c => ({
+      ...c,
+      score: maxRrf > 0 ? 0.3 * (c.score / maxRrf) * 0.5 : 0,
+    }));
+    return { reranked: [...reranked, ...remaining], cost, scores };
+  } catch (err) {
+    console.warn("Reranking failed, falling back to RRF order:", err);
+    return {
+      reranked: chunks,
+      cost: { layer: "reranking", model: MODELS.QUERY_UNDERSTANDING, input_tokens: 0, output_tokens: 0, cost_usd: 0, latency_ms: 0 },
+      scores: chunks.map(() => -1),
+    };
+  }
+}
+
+// ============================================================
 // Group chunks by verdict
 // ============================================================
 
@@ -422,6 +529,7 @@ export interface SearchBaseResult {
     fts_results: { sygnatura: string; section_label: string; score: number; chunk_text_preview: string }[];
     vector_results: { sygnatura: string; section_label: string; score: number; chunk_text_preview: string }[];
     fused_results: { sygnatura: string; section_label: string; score: number; source: string }[];
+    reranked_results: { sygnatura: string; section_label: string; score: number; llm_score: number; original_rank: number }[];
     fts_query: string;
   };
 }
@@ -472,7 +580,14 @@ export async function searchBase(userQuery: string, filters?: SearchFilters): Pr
 
   // Layer 2: Reciprocal Rank Fusion
   const fusedChunks = reciprocalRankFusion(vectorResults, ftsResults);
-  const verdicts = groupByVerdict(fusedChunks, 100);
+
+  // Layer 2.5: LLM Reranking
+  const { reranked: rerankedChunks, cost: rerankCost, scores: rerankScores } =
+    await rerankChunks(userQuery, fusedChunks);
+  costs.push(rerankCost);
+  totalTokens += rerankCost.input_tokens + rerankCost.output_tokens;
+
+  const verdicts = groupByVerdict(rerankedChunks, 100);
 
   const sygnaturaMap: Record<string, number> = {};
   for (const v of verdicts) {
@@ -501,7 +616,7 @@ export async function searchBase(userQuery: string, filters?: SearchFilters): Pr
     query: userQuery,
     verdicts,
     sygnatura_map: sygnaturaMap,
-    fusedChunks,
+    fusedChunks: rerankedChunks,
     costs,
     totalTokens,
     startTime,
@@ -514,6 +629,13 @@ export async function searchBase(userQuery: string, filters?: SearchFilters): Pr
         section_label: c.section_label,
         score: c.score,
         source: c.source,
+      })),
+      reranked_results: rerankedChunks.slice(0, 30).map((c, i) => ({
+        sygnatura: c.sygnatura,
+        section_label: c.section_label,
+        score: c.score,
+        llm_score: rerankScores[fusedChunks.findIndex(fc => fc.chunk_id === c.chunk_id)] ?? -1,
+        original_rank: fusedChunks.findIndex(fc => fc.chunk_id === c.chunk_id),
       })),
       fts_query: buildTsQuery(understanding.keywords),
     },

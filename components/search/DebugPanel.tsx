@@ -12,6 +12,7 @@ export function DebugPanel({ debug }: { debug: DebugData }) {
     { id: "fts", label: `FTS (${debug.fts_results?.length ?? 0})` },
     { id: "vector", label: `Vector (${debug.vector_results?.length ?? 0})` },
     { id: "fused", label: `Fused (${debug.fused_results?.length ?? 0})` },
+    { id: "reranked", label: `Reranked (${debug.reranked_results?.length ?? 0})` },
   ];
 
   return (
@@ -107,6 +108,31 @@ export function DebugPanel({ debug }: { debug: DebugData }) {
                       r.source === "vector" ? "bg-blue-100 text-blue-800" :
                       "bg-yellow-100 text-yellow-800"
                     }`}>{r.source}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {section === "reranked" && debug.reranked_results && (
+            <div className="space-y-1 max-h-96 overflow-y-auto">
+              {debug.reranked_results.map((r, i) => (
+                <div key={i} className="text-xs bg-white rounded p-2 border border-orange-200 flex justify-between items-center">
+                  <div>
+                    <span className="font-semibold text-orange-900">#{i + 1} {r.sygnatura}</span>
+                    <span className="text-orange-600 ml-2">[{r.section_label}]</span>
+                  </div>
+                  <div className="flex gap-3 font-mono text-orange-700">
+                    <span>blended: {r.score.toFixed(6)}</span>
+                    <span className={`px-1 rounded ${
+                      r.llm_score >= 7 ? "bg-green-100 text-green-800" :
+                      r.llm_score >= 4 ? "bg-yellow-100 text-yellow-800" :
+                      r.llm_score >= 0 ? "bg-red-100 text-red-800" :
+                      "bg-gray-100 text-gray-600"
+                    }`}>llm: {r.llm_score >= 0 ? r.llm_score : "n/a"}</span>
+                    {r.original_rank !== i && (
+                      <span className="text-orange-500">was #{r.original_rank + 1}</span>
+                    )}
                   </div>
                 </div>
               ))}
