@@ -46,16 +46,16 @@ export default function RootLayout({
                     Szukaj
                   </Link>
                   <Link
+                    href="/browse"
+                    className="text-sm text-muted hover:text-foreground transition-colors"
+                  >
+                    Orzeczenia
+                  </Link>
+                  <Link
                     href="/history"
                     className="text-sm text-muted hover:text-foreground transition-colors"
                   >
                     Historia
-                  </Link>
-                  <Link
-                    href="/admin"
-                    className="text-sm text-muted hover:text-foreground transition-colors"
-                  >
-                    Koszty
                   </Link>
                 </div>
               </div>
