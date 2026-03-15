@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import {
   SearchBar,
   AIOverview,
@@ -17,7 +16,6 @@ import type {
 } from "@/components/search";
 
 export default function SearchPage() {
-  const router = useRouter();
   const [verdicts, setVerdicts] = useState<VerdictResult[]>([]);
   const [sygnaturaMap, setSygnaturaMap] = useState<Record<string, number>>({});
   const [aiOverview, setAiOverview] = useState("");
@@ -112,9 +110,9 @@ export default function SearchPage() {
                     setUnresolvedRefs(parsed.unresolved_refs);
                   }
                   setMetadata(parsed.metadata);
-                  // Redirect to saved search page
+                  // Update URL without navigating (preserves streaming state)
                   if (parsed.search_id) {
-                    router.replace(`/search/${parsed.search_id}`);
+                    window.history.replaceState(null, "", `/search/${parsed.search_id}`);
                   }
                 } else if (currentEvent === "error") {
                   setAiStreaming(false);
@@ -136,7 +134,7 @@ export default function SearchPage() {
         }
       }
     },
-    [router]
+    []
   );
 
   return (

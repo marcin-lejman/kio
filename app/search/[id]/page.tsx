@@ -149,7 +149,7 @@ export default function SavedSearchPage() {
                   }
                   setLiveMetadata(parsed.metadata);
                   if (parsed.search_id) {
-                    router.replace(`/search/${parsed.search_id}`);
+                    window.history.replaceState(null, "", `/search/${parsed.search_id}`);
                   }
                 } else if (currentEvent === "error") {
                   setLiveAiStreaming(false);
