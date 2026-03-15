@@ -38,7 +38,7 @@ export default function RootLayout({
                 >
                   Wyszukiwarka KIO
                 </Link>
-                <div className="hidden sm:flex items-center gap-6">
+                <div className="flex items-center gap-4 sm:gap-6">
                   <Link
                     href="/"
                     className="text-sm text-muted hover:text-foreground transition-colors"
