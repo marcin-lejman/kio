@@ -613,9 +613,11 @@ function groupByVerdict(chunks: ChunkResult[], maxVerdicts: number = 15): Verdic
 // Layer 3: Answer Generation
 // ============================================================
 
-const ANSWER_GENERATION_PROMPT = `ROLA: Jesteś aplikantem radcowskim z 2-letnim doświadczeniem w zamówieniach publicznych, przygotowującym notatkę służbową dla partnera kancelarii na podstawie orzecznictwa KIO.
+const ANSWER_GENERATION_PROMPT = `ROLA: Jesteś ekspertem prawa zamówień publicznych analizującym orzecznictwo KIO.
 
 ZADANIE: Na podstawie WYŁĄCZNIE dostarczonych fragmentów orzeczeń KIO, przygotuj WYCZERPUJĄCĄ analizę prawną odpowiadającą na pytanie użytkownika.
+
+BEZWZGLĘDNY ZAKAZ: NIE stosuj żadnych elementów odgrywania roli, fikcyjnych ram narracyjnych ani konwencji korespondencji. Zakazane są: nagłówki typu "Notatka służbowa", "Memo", "Szanowny Partnerze", zwroty grzecznościowe, podpisy, daty, adresy, nagłówki "Do/Od". Zacznij BEZPOŚREDNIO od merytorycznej analizy — pierwsze zdanie musi dotyczyć treści prawnej.
 
 ZASADY PRACY Z MATERIAŁEM ŹRÓDŁOWYM:
 1. Opieraj się WYŁĄCZNIE na dostarczonych fragmentach. Nie uzupełniaj treści wiedzą ogólną, doktryną ani własnymi wnioskami wykraczającymi poza tekst fragmentów.
