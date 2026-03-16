@@ -42,6 +42,7 @@ export interface SearchMetadataType {
 export interface DebugData {
   query_understanding: {
     keywords: string[];
+    keyword_groups?: { concept: string; forms: string[] }[];
     semantic_query: string;
     filters: Record<string, string>;
   } | null;

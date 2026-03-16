@@ -12,8 +12,14 @@ export interface SearchFilters {
   date_to?: string;
 }
 
+export interface KeywordGroup {
+  concept: string;
+  forms: string[];
+}
+
 export interface QueryUnderstanding {
   keywords: string[];
+  keyword_groups?: KeywordGroup[];
   semantic_query: string;
   filters: SearchFilters;
 }
@@ -87,23 +93,39 @@ export interface CostEntry {
 const QUERY_UNDERSTANDING_PROMPT = `Jesteś asystentem wyszukiwarki orzeczeń Krajowej Izby Odwoławczej (KIO) w zamówieniach publicznych.
 
 Twoim zadaniem jest analiza zapytania użytkownika i wygenerowanie:
-1. keywords — lista polskich słów kluczowych w WSZYSTKICH ważnych formach gramatycznych (mianownik, dopełniacz, celownik, biernik, narzędnik, miejscownik) oraz synonimy i powiązane terminy prawnicze. Generuj 10-30 form.
-2. semantic_query — przeformułowane zapytanie semantyczne zoptymalizowane pod wyszukiwanie wektorowe w kontekście orzecznictwa KIO.
-3. filters — opcjonalne filtry (document_type: "wyrok"|"postanowienie", decision_type: "oddalone"|"uwzglednione"|"umorzone"|"odrzucone", date_from, date_to w formacie YYYY-MM-DD).
+1. keyword_groups — lista GRUP pojęciowych. Każda grupa to jeden koncept z zapytania, z wariantami gramatycznymi (mianownik, dopełniacz, celownik, biernik, narzędnik, miejscownik) oraz synonimy. Generuj 5-15 form na grupę. Każda grupa: {"concept": "nazwa_konceptu", "forms": ["forma1", "forma2", ...]}.
+2. keywords — PŁASKA lista wszystkich form ze wszystkich grup (do podświetlania wyników).
+3. semantic_query — przeformułowane zapytanie semantyczne zoptymalizowane pod wyszukiwanie wektorowe w kontekście orzecznictwa KIO.
+4. filters — opcjonalne filtry (document_type: "wyrok"|"postanowienie", decision_type: "oddalone"|"uwzglednione"|"umorzone"|"odrzucone", date_from, date_to w formacie YYYY-MM-DD).
 
-PRZYKŁADY rozwinięcia słów kluczowych:
+ZASADY GRUPOWANIA:
+- Każdy odrębny koncept/temat z zapytania = osobna grupa.
+- Wyrażenia stanowiące JEDNĄ frazę prawniczą (np. "rażąco niska cena") to JEDNA grupa, nie trzy.
+- Synonimy i terminy pokrewne wchodzą do grupy tego konceptu, który zastępują.
+- Frazy wielowyrazowe (np. "roboty budowlane") umieszczaj jako pełne frazy w forms.
 
-Zapytanie: "budowa drogi gminnej"
-keywords: ["budowa", "budowy", "budową", "budowie", "budowę", "roboty budowlane", "robót budowlanych", "robotami budowlanymi", "droga", "drogi", "drogą", "drodze", "dróg", "drogowej", "drogowych", "gminna", "gminnej", "gminnych", "gminnym", "gminną", "inwestycja drogowa", "infrastruktura drogowa", "nawierzchnia"]
+PRZYKŁADY:
+
+Zapytanie: "wycofanie wadium"
+keyword_groups: [
+  {"concept": "wycofanie", "forms": ["wycofanie", "wycofania", "wycofaniu", "wycofać", "wycofał", "cofnięcie", "cofnięcia", "zwrot", "zwrotu", "zwrócenie"]},
+  {"concept": "wadium", "forms": ["wadium", "wadiem", "wadialne", "zabezpieczenie wadialne", "zabezpieczenia wadialnego"]}
+]
 
 Zapytanie: "rażąco niska cena"
-keywords: ["rażąco", "niska", "niskiej", "niską", "niskie", "cena", "ceny", "ceną", "cenie", "cenę", "cen", "rażąco niska cena", "rażąco niskiej ceny", "rażąco niską cenę", "wyjaśnienia ceny", "wyjaśnień ceny", "kosztorys", "kosztorysu", "kosztorysem", "wycena", "wyceny", "kalkulacja", "kalkulacji"]
+keyword_groups: [
+  {"concept": "rażąco niska cena", "forms": ["rażąco niska cena", "rażąco niskiej ceny", "rażąco niską cenę", "rażąco niską ceną", "rażąco niska", "rażąco niskiej", "rażąco niską", "rażąco niskiego", "rażąco niskie wynagrodzenie", "rażąco niskiego wynagrodzenia", "wyjaśnienia ceny", "wyjaśnień ceny", "wyjaśnienia rażąco niskiej ceny", "kosztorys", "kosztorysu", "kalkulacja", "kalkulacji", "wycena", "wyceny"]}
+]
 
-Zapytanie: "wykluczenie wykonawcy"
-keywords: ["wykluczenie", "wykluczenia", "wykluczeniem", "wykluczeniu", "wykluczonego", "wykluczyć", "wykonawca", "wykonawcy", "wykonawcę", "wykonawców", "wykonawcą", "podmiot", "konsorcjum", "przesłanki wykluczenia", "przesłanek wykluczenia", "podstawy wykluczenia", "JEDZ", "oświadczenie", "oświadczenia", "warunki udziału"]
+Zapytanie: "wykluczenie wykonawcy za fałszywe oświadczenie"
+keyword_groups: [
+  {"concept": "wykluczenie", "forms": ["wykluczenie", "wykluczenia", "wykluczeniem", "wykluczeniu", "wykluczonego", "wykluczyć", "przesłanki wykluczenia", "przesłanek wykluczenia", "podstawy wykluczenia"]},
+  {"concept": "wykonawca", "forms": ["wykonawca", "wykonawcy", "wykonawcę", "wykonawców", "wykonawcą", "podmiot", "konsorcjum"]},
+  {"concept": "fałszywe oświadczenie", "forms": ["fałszywe oświadczenie", "fałszywego oświadczenia", "fałszywym oświadczeniem", "nieprawdziwe informacje", "nieprawdziwych informacji", "wprowadzenie w błąd", "wprowadzenia w błąd", "JEDZ", "oświadczenie", "oświadczenia"]}
+]
 
 Odpowiedz WYŁĄCZNIE prawidłowym JSON-em bez markdown, bez komentarzy:
-{"keywords": [...], "semantic_query": "...", "filters": {}}`;
+{"keyword_groups": [...], "keywords": [...], "semantic_query": "...", "filters": {}}`;
 
 export async function queryUnderstanding(userQuery: string): Promise<{ result: QueryUnderstanding; cost: CostEntry }> {
   const response = await chatCompletion(
@@ -117,7 +139,33 @@ export async function queryUnderstanding(userQuery: string): Promise<{ result: Q
 
   let parsed: QueryUnderstanding;
   try {
-    parsed = JSON.parse(response.content);
+    const raw = JSON.parse(response.content);
+    parsed = raw as QueryUnderstanding;
+
+    // Ensure keyword_groups is properly structured
+    if (Array.isArray(parsed.keyword_groups) && parsed.keyword_groups.length > 0) {
+      // Validate each group has concept and forms
+      parsed.keyword_groups = parsed.keyword_groups.filter(
+        (g) => g && typeof g.concept === "string" && Array.isArray(g.forms) && g.forms.length > 0
+      );
+      // Generate flat keywords from groups if not provided or incomplete
+      if (!parsed.keywords || parsed.keywords.length === 0) {
+        parsed.keywords = parsed.keyword_groups.flatMap((g) => g.forms);
+      }
+    } else {
+      // No valid groups — clear the field so buildTsQuery falls back to flat OR
+      parsed.keyword_groups = undefined;
+    }
+
+    if (!parsed.keywords || parsed.keywords.length === 0) {
+      parsed.keywords = userQuery.split(/\s+/).filter((w) => w.length > 2);
+    }
+    if (!parsed.semantic_query) {
+      parsed.semantic_query = userQuery;
+    }
+    if (!parsed.filters) {
+      parsed.filters = {};
+    }
   } catch {
     // Fallback: use the query as-is
     parsed = {
@@ -183,20 +231,97 @@ async function vectorSearch(
   }));
 }
 
-function buildTsQuery(keywords: string[]): string {
-  // For to_tsquery('simple', ...): each keyword must be a valid lexeme.
-  // Multi-word keywords like "roboty budowlane" become "roboty <-> budowlane" (phrase/adjacent).
-  // Single words stay as-is. All joined with | (OR).
-  return keywords
-    .map((kw) => {
-      const words = kw.trim().split(/\s+/).filter(Boolean);
-      if (words.length === 0) return null;
-      // Sanitize: remove any tsquery special characters from individual words
-      const clean = words.map((w) => w.replace(/[&|!<>():*\\]/g, ""));
-      if (clean.length === 1) return clean[0];
-      // Multi-word: use adjacency operator <->
-      return clean.join(" <-> ");
-    })
+/**
+ * Strip Polish diacritics from text. Used to generate diacritic-insensitive
+ * FTS variants so "zamowien" matches "zamówień".
+ */
+function stripPolishDiacritics(text: string): string {
+  const map: Record<string, string> = {
+    'ą': 'a', 'ć': 'c', 'ę': 'e', 'ł': 'l', 'ń': 'n',
+    'ó': 'o', 'ś': 's', 'ź': 'z', 'ż': 'z',
+    'Ą': 'A', 'Ć': 'C', 'Ę': 'E', 'Ł': 'L', 'Ń': 'N',
+    'Ó': 'O', 'Ś': 'S', 'Ź': 'Z', 'Ż': 'Z',
+  };
+  return text.replace(/[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/g, (c) => map[c] || c);
+}
+
+/**
+ * Expand a list of keyword forms with diacritic-stripped variants.
+ * Only adds the stripped form if it differs from the original.
+ */
+function expandWithDiacriticVariants(forms: string[]): string[] {
+  const expanded = new Set(forms);
+  for (const form of forms) {
+    const stripped = stripPolishDiacritics(form);
+    if (stripped !== form) {
+      expanded.add(stripped);
+    }
+  }
+  return [...expanded];
+}
+
+/**
+ * Convert a single keyword (possibly multi-word) into a tsquery fragment.
+ * Single words → lexeme as-is. Multi-word → adjacency operator (<->).
+ */
+function keywordToTsFragment(kw: string): string | null {
+  const words = kw.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return null;
+  const clean = words.map((w) => w.replace(/[&|!<>():*\\]/g, "")).filter(Boolean);
+  if (clean.length === 0) return null;
+  if (clean.length === 1) return clean[0];
+  return clean.join(" <-> ");
+}
+
+/**
+ * Build a tsquery string from keyword groups (concept-grouped) or flat keywords.
+ *
+ * With groups: AND between concept groups, OR within each group's forms.
+ *   e.g. (wycofanie | wycofania | cofnięcie) & (wadium | wadiem)
+ *
+ * Without groups (fallback): all keywords OR'd together (legacy behavior).
+ */
+function buildTsQuery(keywords: string[], keywordGroups?: KeywordGroup[]): string {
+  if (keywordGroups && keywordGroups.length > 0) {
+    const groupClauses = keywordGroups
+      .map((group) => {
+        const expandedForms = expandWithDiacriticVariants(group.forms);
+        const fragments = expandedForms
+          .map(keywordToTsFragment)
+          .filter(Boolean) as string[];
+        if (fragments.length === 0) return null;
+        if (fragments.length === 1) return fragments[0];
+        return `( ${fragments.join(" | ")} )`;
+      })
+      .filter(Boolean) as string[];
+
+    if (groupClauses.length === 0) {
+      // All groups empty — fall through to flat keywords
+    } else if (groupClauses.length === 1) {
+      return groupClauses[0];
+    } else {
+      return groupClauses.join(" & ");
+    }
+  }
+
+  // Fallback: flat OR of all keywords (legacy behavior)
+  const expandedKeywords = expandWithDiacriticVariants(keywords);
+  return expandedKeywords
+    .map(keywordToTsFragment)
+    .filter(Boolean)
+    .join(" | ");
+}
+
+/**
+ * Build a relaxed (OR-only) tsquery from keyword groups, used when AND query
+ * returns too few results.
+ */
+function buildTsQueryRelaxed(keywords: string[], keywordGroups?: KeywordGroup[]): string {
+  const allForms = keywordGroups
+    ? keywordGroups.flatMap((g) => g.forms)
+    : keywords;
+  return allForms
+    .map(keywordToTsFragment)
     .filter(Boolean)
     .join(" | ");
 }
@@ -204,10 +329,11 @@ function buildTsQuery(keywords: string[]): string {
 async function ftsSearch(
   keywords: string[],
   filters: SearchFilters,
-  limit: number = 50
+  limit: number = 50,
+  keywordGroups?: KeywordGroup[],
 ): Promise<ChunkResult[]> {
   const supabase = createServerClient();
-  const searchQuery = buildTsQuery(keywords);
+  const searchQuery = buildTsQuery(keywords, keywordGroups);
 
   const { data, error } = await supabase.rpc("search_chunks_fts", {
     search_query: searchQuery,
@@ -220,7 +346,29 @@ async function ftsSearch(
 
   if (error) throw new Error(`FTS search error: ${error.message}`);
 
-  return (data || []).map((row: Record<string, unknown>) => ({
+  // Safety net: if AND-grouped query returned too few results, retry with relaxed OR
+  if (keywordGroups && keywordGroups.length > 1 && (!data || data.length < 5)) {
+    const relaxedQuery = buildTsQueryRelaxed(keywords, keywordGroups);
+    if (relaxedQuery !== searchQuery) {
+      const { data: relaxedData, error: relaxedError } = await supabase.rpc("search_chunks_fts", {
+        search_query: relaxedQuery,
+        match_count: limit,
+        filter_type: filters.document_type || null,
+        filter_decision: filters.decision_type || null,
+        filter_date_from: filters.date_from || null,
+        filter_date_to: filters.date_to || null,
+      });
+      if (!relaxedError && relaxedData && relaxedData.length > (data?.length || 0)) {
+        return mapFtsRows(relaxedData);
+      }
+    }
+  }
+
+  return mapFtsRows(data || []);
+}
+
+function mapFtsRows(data: Record<string, unknown>[]): ChunkResult[] {
+  return data.map((row) => ({
     chunk_id: row.chunk_id as number,
     verdict_id: row.verdict_id as number,
     section_label: row.section_label as string,
@@ -325,7 +473,8 @@ async function rerankChunks(
   const top = chunks.slice(0, 30);
   const fragmentList = top
     .map((c, i) => {
-      const preview = c.chunk_text.slice(0, 400);
+      const preamblePrefix = c.preamble ? `${c.preamble}\n` : '';
+      const preview = preamblePrefix + c.chunk_text.slice(0, 1200);
       const label = c.sygnatura.includes("|")
         ? c.sygnatura.split("|").map(s => s.trim()).join(", ")
         : c.sygnatura;
@@ -379,11 +528,16 @@ async function rerankChunks(
     // Sort by blended score descending
     reranked.sort((a, b) => b.score - a.score);
 
-    // Append any remaining chunks (31+) that weren't reranked — give them a low blended score
-    const remaining = chunks.slice(30).map(c => ({
-      ...c,
-      score: maxRrf > 0 ? 0.3 * (c.score / maxRrf) * 0.5 : 0,
-    }));
+    // Append remaining chunks (31+) with gradual decay instead of hard cliff
+    const remaining = chunks.slice(30).map((c, i) => {
+      const rrfNorm = maxRrf > 0 ? c.score / maxRrf : 0;
+      // Estimate LLM score decaying from 0.3 (moderate-low relevance)
+      const estimatedLlmNorm = Math.max(0.1, 0.3 - i * 0.005);
+      return {
+        ...c,
+        score: 0.3 * rrfNorm + 0.7 * estimatedLlmNorm,
+      };
+    });
     return { reranked: [...reranked, ...remaining], cost, scores };
   } catch (err) {
     console.warn("Reranking failed, falling back to RRF order:", err);
@@ -399,6 +553,20 @@ async function rerankChunks(
 // Group chunks by verdict
 // ============================================================
 
+/**
+ * Compute verdict-level relevance from its matching passages.
+ * Best chunk score + diminishing bonus for additional matching chunks.
+ */
+function computeVerdictScore(passages: { score: number }[]): number {
+  if (passages.length === 0) return 0;
+  const sorted = passages.map((p) => p.score).sort((a, b) => b - a);
+  const best = sorted[0];
+  const bonus = sorted.slice(1).reduce((sum, s, i) => {
+    return sum + s * (0.1 / (i + 1));
+  }, 0);
+  return best + bonus;
+}
+
 function groupByVerdict(chunks: ChunkResult[], maxVerdicts: number = 15): VerdictResult[] {
   const verdictMap = new Map<number, VerdictResult>();
 
@@ -410,8 +578,6 @@ function groupByVerdict(chunks: ChunkResult[], maxVerdicts: number = 15): Verdic
         section_label: chunk.section_label,
         score: chunk.score,
       });
-      // Update relevance score (max of all chunks)
-      existing.relevance_score = Math.max(existing.relevance_score, chunk.score);
     } else {
       verdictMap.set(chunk.verdict_id, {
         verdict_id: chunk.verdict_id,
@@ -431,6 +597,11 @@ function groupByVerdict(chunks: ChunkResult[], maxVerdicts: number = 15): Verdic
         ],
       });
     }
+  }
+
+  // Recompute verdict scores with multi-chunk bonus
+  for (const v of verdictMap.values()) {
+    v.relevance_score = computeVerdictScore(v.matching_passages);
   }
 
   return Array.from(verdictMap.values())
@@ -575,7 +746,7 @@ export async function searchBase(userQuery: string, filters?: SearchFilters): Pr
   const dbSearchStart = Date.now();
   const [vectorResults, ftsResults] = await Promise.all([
     vectorSearch(embedding, mergedFilters, 150),
-    ftsSearch(understanding.keywords, mergedFilters, 150),
+    ftsSearch(understanding.keywords, mergedFilters, 150, understanding.keyword_groups),
   ]);
   costs.push({
     layer: "db_search",
@@ -647,7 +818,7 @@ export async function searchBase(userQuery: string, filters?: SearchFilters): Pr
         llm_score: rerankScores[fusedChunks.findIndex(fc => fc.chunk_id === c.chunk_id)] ?? -1,
         original_rank: fusedChunks.findIndex(fc => fc.chunk_id === c.chunk_id),
       })),
-      fts_query: buildTsQuery(understanding.keywords),
+      fts_query: buildTsQuery(understanding.keywords, understanding.keyword_groups),
       answer_prompt: rerankedChunks.length > 0 ? buildAnswerMessages(userQuery, understanding.semantic_query, rerankedChunks) : null,
     },
   };
