@@ -57,7 +57,9 @@ function formatPolishDate(dateStr: string): string {
 }
 
 function formatSygnatura(syg: string): string {
-  return syg.includes("|") ? syg.split("|").map((s) => s.trim()).join(", ") : syg;
+  // Normalize slash spacing (e.g. "KIO 58 /11" → "KIO 58/11") for consistent display
+  const normalized = syg.replace(/\s*\/\s*/g, "/");
+  return normalized.includes("|") ? normalized.split("|").map((s) => s.trim()).join(", ") : normalized;
 }
 
 /**

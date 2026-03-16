@@ -37,7 +37,9 @@ function injectSygnaturaLinks(
     }
 
     const ref = match[1].replace(/\s+/g, " ").trim();
-    const verdictId = sygnaturaMap[ref];
+    // Normalize slash spacing to match sygnaturaMap keys (safety net for old saved searches)
+    const normalizedRef = ref.replace(/\s*\/\s*/g, "/");
+    const verdictId = sygnaturaMap[ref] ?? sygnaturaMap[normalizedRef];
 
     if (verdictId != null) {
       parts.push(

@@ -599,14 +599,15 @@ export async function searchBase(userQuery: string, filters?: SearchFilters): Pr
 
   const sygnaturaMap: Record<string, number> = {};
   for (const v of verdicts) {
-    sygnaturaMap[v.sygnatura] = v.verdict_id;
+    const normalizedKey = normalizeSygnatura(v.sygnatura);
+    sygnaturaMap[normalizedKey] = v.verdict_id;
     // For pipe-separated sygnaturas like "KIO 3800/23|KIO 3809/23",
     // also index each individual part so AI-generated references resolve
     if (v.sygnatura.includes("|")) {
       for (const part of v.sygnatura.split("|")) {
-        const trimmed = part.trim();
-        if (trimmed && !(trimmed in sygnaturaMap)) {
-          sygnaturaMap[trimmed] = v.verdict_id;
+        const normalized = normalizeSygnatura(part);
+        if (normalized && !(normalized in sygnaturaMap)) {
+          sygnaturaMap[normalized] = v.verdict_id;
         }
       }
     }
