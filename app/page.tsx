@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import {
   SearchBar,
   AIOverview,
@@ -16,6 +17,7 @@ import type {
 } from "@/components/search";
 
 export default function SearchPage() {
+  const router = useRouter();
   const [verdicts, setVerdicts] = useState<VerdictResult[]>([]);
   const [sygnaturaMap, setSygnaturaMap] = useState<Record<string, number>>({});
   const [aiOverview, setAiOverview] = useState("");
@@ -30,6 +32,7 @@ export default function SearchPage() {
   const [visibleCount, setVisibleCount] = useState(15);
   const [verdictCount, setVerdictCount] = useState<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const pendingSearchIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     fetch("/api/stats")
@@ -110,9 +113,8 @@ export default function SearchPage() {
                     setUnresolvedRefs(parsed.unresolved_refs);
                   }
                   setMetadata(parsed.metadata);
-                  // Update URL without navigating (preserves streaming state)
                   if (parsed.search_id) {
-                    window.history.replaceState(null, "", `/search/${parsed.search_id}`);
+                    pendingSearchIdRef.current = parsed.search_id;
                   }
                 } else if (currentEvent === "error") {
                   setAiStreaming(false);
@@ -131,10 +133,15 @@ export default function SearchPage() {
         if (!abort.signal.aborted) {
           setLoading(false);
           setAiStreaming(false);
+          // Navigate to the saved search page after stream is fully complete
+          if (pendingSearchIdRef.current) {
+            router.replace(`/search/${pendingSearchIdRef.current}`, { scroll: false });
+            pendingSearchIdRef.current = null;
+          }
         }
       }
     },
-    []
+    [router]
   );
 
   return (

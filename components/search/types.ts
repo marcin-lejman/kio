@@ -50,6 +50,7 @@ export interface DebugData {
   vector_results?: { sygnatura: string; section_label: string; score: number; chunk_text_preview: string }[];
   fused_results?: { sygnatura: string; section_label: string; score: number; source: string }[];
   reranked_results?: { sygnatura: string; section_label: string; score: number; llm_score: number; original_rank: number }[];
+  answer_prompt?: { role: string; content: string }[] | null;
 }
 
 export const ANSWER_MODELS = [

@@ -444,44 +444,50 @@ function groupByVerdict(chunks: ChunkResult[], maxVerdicts: number = 15): Verdic
 
 const ANSWER_GENERATION_PROMPT = `ROLA: Jesteś aplikantem radcowskim z 2-letnim doświadczeniem w zamówieniach publicznych, przygotowującym notatkę służbową dla partnera kancelarii na podstawie orzecznictwa KIO.
 
-ZADANIE: Na podstawie WYŁĄCZNIE dostarczonych fragmentów orzeczeń KIO, przygotuj zwięzłą analizę prawną odpowiadającą na pytanie użytkownika.
+ZADANIE: Na podstawie WYŁĄCZNIE dostarczonych fragmentów orzeczeń KIO, przygotuj WYCZERPUJĄCĄ analizę prawną odpowiadającą na pytanie użytkownika.
 
 ZASADY PRACY Z MATERIAŁEM ŹRÓDŁOWYM:
 1. Opieraj się WYŁĄCZNIE na dostarczonych fragmentach. Nie uzupełniaj treści wiedzą ogólną, doktryną ani własnymi wnioskami wykraczającymi poza tekst fragmentów.
 2. Jeśli fragment jest niejasny lub niepełny — zaznacz to wprost zamiast domyślać się intencji Izby.
 3. Jeśli fragmenty nie pozwalają na pełną odpowiedź, napisz co z nich wynika i wyraźnie wskaż luki (np. "Dostępne fragmenty nie odnoszą się do kwestii X").
 4. NIE łącz tez z różnych orzeczeń w sposób sugerujący, że Izba wypowiedziała się w danej sprawie kompleksowo, jeśli każde orzeczenie dotyczyło innego stanu faktycznego.
+5. WYKORZYSTAJ MAKSYMALNIE wszystkie dostarczone fragmenty, które są merytorycznie powiązane z zapytaniem semantycznym. Nie ograniczaj się do 2-3 fragmentów — jeśli 10 z 15 fragmentów zawiera istotne treści, omów je wszystkie. Celem jest KOMPLEKSOWE pokrycie dostępnego materiału, nie streszczenie kilku wybranych orzeczeń. Pomiń jedynie fragmenty ewidentnie nietrafione (np. dotyczące zupełnie innego zagadnienia).
 
 CYTOWANIE I SYGNATURY:
-5. Każde twierdzenie o stanowisku Izby MUSI zawierać odniesienie do konkretnego orzeczenia w formacie [KIO XXXX/XX].
-6. UŻYWAJ WYŁĄCZNIE sygnatur z listy DOSTĘPNE SYGNATURY podanej poniżej fragmentów. Przepisuj sygnatury DOKŁADNIE — nie zmieniaj, nie łącz, nie skracaj numerów. Jeśli sygnatura nie znajduje się na liście, NIE MOŻESZ jej użyć.
-7. Cytaty dosłowne z fragmentów oznaczaj cudzysłowami „...". Cytuj dosłownie TYLKO gdy precyzyjne sformułowanie Izby ma znaczenie dla argumentacji. W pozostałych przypadkach parafrazuj.
-8. Każdy cytat dosłowny musi być możliwy do zweryfikowania w dostarczonym fragmencie — nie rekonstruuj cytatów z pamięci.
+6. Każde twierdzenie o stanowisku Izby MUSI zawierać odniesienie do konkretnego orzeczenia w formacie [KIO XXXX/XX].
+7. BEZWZGLĘDNY ZAKAZ cytowania sygnatur spoza sekcji „BIAŁĄ LISTA SYGNATUR" w wiadomości użytkownika. To jest zamknięta, wyczerpująca lista — żadne inne sygnatury NIE ISTNIEJĄ. Nie wymyślaj, nie rekonstruuj z pamięci, nie zgaduj numerów. Jeśli nie ma sygnatury na białej liście, NIE MOŻESZ się do niej odwołać. Naruszenie tej zasady jest KRYTYCZNYM BŁĘDEM.
+8. Przepisuj sygnatury z białej listy DOKŁADNIE — nie zmieniaj, nie łącz, nie skracaj numerów.
+9. Cytaty dosłowne z fragmentów oznaczaj cudzysłowami „...". Cytuj dosłownie TYLKO gdy precyzyjne sformułowanie Izby ma znaczenie dla argumentacji. W pozostałych przypadkach parafrazuj.
+10. Każdy cytat dosłowny musi być możliwy do zweryfikowania w dostarczonym fragmencie — nie rekonstruuj cytatów z pamięci.
 
 STRUKTURA ODPOWIEDZI:
-9. Zacznij od 1-2 zdań podsumowujących główny wniosek wynikający z analizowanych orzeczeń.
-10. Następnie przedstaw stanowiska z poszczególnych orzeczeń, wskazując — tam gdzie to istotne — kontekst faktyczny sprawy (jaki był przedmiot zamówienia, czego dotyczył zarzut).
-11. Jeśli orzeczenia prezentują rozbieżne stanowiska, wyraźnie to zaznacz.
-12. Zakończ krótką oceną przydatności dostępnego materiału dla pytania użytkownika (np. "Powyższe orzeczenia dotyczą bezpośrednio problematyki X" lub "Fragmenty dotyczą pokrewnych zagadnień, ale nie odpowiadają wprost na pytanie o Y").
+11. Zacznij od 1-2 zdań podsumowujących główny wniosek wynikający z analizowanych orzeczeń.
+12. Następnie przedstaw stanowiska z poszczególnych orzeczeń, wskazując — tam gdzie to istotne — kontekst faktyczny sprawy (jaki był przedmiot zamówienia, czego dotyczył zarzut).
+13. Jeśli orzeczenia prezentują rozbieżne stanowiska, wyraźnie to zaznacz.
+14. Zakończ krótką oceną przydatności dostępnego materiału dla pytania użytkownika (np. "Powyższe orzeczenia dotyczą bezpośrednio problematyki X" lub "Fragmenty dotyczą pokrewnych zagadnień, ale nie odpowiadają wprost na pytanie o Y").
 
 STYL:
-13. Pisz po polsku, językiem prawniczym ale komunikatywnym — jak w notatce wewnętrznej kancelarii, nie jak w podręczniku.
-14. Unikaj ogólników typu "Izba wielokrotnie podkreślała" jeśli masz tylko 1-2 orzeczenia na dany temat. Precyzyjnie oddawaj skalę materiału.`;
+15. Pisz po polsku, językiem prawniczym ale komunikatywnym — jak w notatce wewnętrznej kancelarii, nie jak w podręczniku.
+16. Unikaj ogólników typu "Izba wielokrotnie podkreślała" jeśli masz tylko 1-2 orzeczenia na dany temat. Precyzyjnie oddawaj skalę materiału.`;
 
 /**
  * Build the list of individual citable sygnaturas from chunks.
  * Splits pipe-separated sygnaturas into individual parts.
  */
+function normalizeSygnatura(s: string): string {
+  return s.replace(/\s+/g, " ").replace(/\s*\/\s*/g, "/").trim();
+}
+
 function buildCitableList(chunks: ChunkResult[]): string[] {
   const set = new Set<string>();
   for (const c of chunks.slice(0, 15)) {
     if (c.sygnatura.includes("|")) {
       for (const part of c.sygnatura.split("|")) {
-        const trimmed = part.trim();
-        if (trimmed) set.add(trimmed);
+        const normalized = normalizeSygnatura(part);
+        if (normalized) set.add(normalized);
       }
     } else {
-      set.add(c.sygnatura.trim());
+      set.add(normalizeSygnatura(c.sygnatura));
     }
   }
   return [...set];
@@ -500,14 +506,14 @@ function buildAnswerContext(chunks: ChunkResult[]): string {
     .join("\n\n");
 }
 
-function buildAnswerMessages(userQuery: string, chunks: ChunkResult[]) {
+function buildAnswerMessages(userQuery: string, semanticQuery: string, chunks: ChunkResult[]) {
   const context = buildAnswerContext(chunks);
   const citableList = buildCitableList(chunks);
   return [
     { role: "system" as const, content: ANSWER_GENERATION_PROMPT },
     {
       role: "user" as const,
-      content: `Pytanie: ${userQuery}\n\nFragmenty orzeczeń KIO:\n\n${context}\n\nDOSTĘPNE SYGNATURY DO CYTOWANIA:\n${citableList.join(", ")}`,
+      content: `Pytanie użytkownika: ${userQuery}\n\nZapytanie semantyczne: ${semanticQuery}\n\nFragmenty orzeczeń KIO:\n\n${context}\n\n========================================\nBIAŁA LISTA SYGNATUR — JEDYNE sygnatury, które możesz cytować:\n${citableList.map(s => `• ${s}`).join("\n")}\n========================================\nUWAGA: Jakiekolwiek odwołanie do sygnatury SPOZA powyższej listy jest niedopuszczalne.`,
     },
   ];
 }
@@ -518,6 +524,7 @@ function buildAnswerMessages(userQuery: string, chunks: ChunkResult[]) {
 
 export interface SearchBaseResult {
   query: string;
+  semanticQuery: string;
   verdicts: VerdictResult[];
   sygnatura_map: Record<string, number>;
   fusedChunks: ChunkResult[];
@@ -531,6 +538,7 @@ export interface SearchBaseResult {
     fused_results: { sygnatura: string; section_label: string; score: number; source: string }[];
     reranked_results: { sygnatura: string; section_label: string; score: number; llm_score: number; original_rank: number }[];
     fts_query: string;
+    answer_prompt: { role: string; content: string }[] | null;
   };
 }
 
@@ -614,6 +622,7 @@ export async function searchBase(userQuery: string, filters?: SearchFilters): Pr
 
   return {
     query: userQuery,
+    semanticQuery: understanding.semantic_query,
     verdicts,
     sygnatura_map: sygnaturaMap,
     fusedChunks: rerankedChunks,
@@ -638,6 +647,7 @@ export async function searchBase(userQuery: string, filters?: SearchFilters): Pr
         original_rank: fusedChunks.findIndex(fc => fc.chunk_id === c.chunk_id),
       })),
       fts_query: buildTsQuery(understanding.keywords),
+      answer_prompt: rerankedChunks.length > 0 ? buildAnswerMessages(userQuery, understanding.semantic_query, rerankedChunks) : null,
     },
   };
 }
@@ -648,10 +658,11 @@ export async function searchBase(userQuery: string, filters?: SearchFilters): Pr
 
 export async function streamAnswer(
   userQuery: string,
+  semanticQuery: string,
   chunks: ChunkResult[],
   answerModel: string,
 ): Promise<{ stream: ReadableStream<Uint8Array>; startTime: number }> {
-  const messages = buildAnswerMessages(userQuery, chunks);
+  const messages = buildAnswerMessages(userQuery, semanticQuery, chunks);
   return chatCompletionStream(messages, answerModel, {
     temperature: 0.2,
     max_tokens: 3000,

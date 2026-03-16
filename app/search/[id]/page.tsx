@@ -55,6 +55,7 @@ export default function SavedSearchPage() {
   const [searchError, setSearchError] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(15);
   const abortRef = useRef<AbortController | null>(null);
+  const pendingSearchIdRef = useRef<number | null>(null);
 
   // Is showing live results or saved?
   const isLive = liveVerdicts !== null;
@@ -149,7 +150,7 @@ export default function SavedSearchPage() {
                   }
                   setLiveMetadata(parsed.metadata);
                   if (parsed.search_id) {
-                    window.history.replaceState(null, "", `/search/${parsed.search_id}`);
+                    pendingSearchIdRef.current = parsed.search_id;
                   }
                 } else if (currentEvent === "error") {
                   setLiveAiStreaming(false);
@@ -168,6 +169,11 @@ export default function SavedSearchPage() {
         if (!abort.signal.aborted) {
           setSearchLoading(false);
           setLiveAiStreaming(false);
+          // Navigate to the new saved search page after stream is fully complete
+          if (pendingSearchIdRef.current) {
+            router.replace(`/search/${pendingSearchIdRef.current}`, { scroll: false });
+            pendingSearchIdRef.current = null;
+          }
         }
       }
     },

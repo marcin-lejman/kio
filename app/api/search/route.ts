@@ -64,7 +64,7 @@ export async function POST(request: NextRequest) {
         if (base.fusedChunks.length > 0) {
           try {
             const { stream: llmStream, startTime: answerStart } =
-              await streamAnswer(base.query, base.fusedChunks, selectedModel);
+              await streamAnswer(base.query, base.semanticQuery, base.fusedChunks, selectedModel);
 
             const reader = llmStream.getReader();
             const decoder = new TextDecoder();
@@ -228,11 +228,30 @@ function extractKioRefs(text: string): { ref: string; start: number; end: number
  * - If it resolves in sygnaturaMap → ensure it's in [brackets]
  * - If it doesn't resolve → leave as plain text, add to unresolved list
  */
+/**
+ * Normalize a sygnatura string for matching: collapse all whitespace around
+ * digits and slashes so "KIO 58 /11" and "KIO 58/11" both become "KIO 58/11".
+ */
+function normalizeSygnatura(s: string): string {
+  return s.replace(/\s+/g, " ").replace(/\s*\/\s*/g, "/").trim();
+}
+
 function validateSygnaturaRefs(
   answer: string,
   sygnaturaMap: Record<string, number>
 ): { fixed: string; unresolved: string[] } {
   const unresolved: string[] = [];
+
+  // Build a normalized lookup: "KIO 58/11" -> verdict_id, preserving original keys
+  // so we can resolve regardless of spacing differences.
+  const normalizedMap = new Map<string, number>();
+  for (const [key, value] of Object.entries(sygnaturaMap)) {
+    normalizedMap.set(normalizeSygnatura(key), value);
+  }
+
+  function resolves(ref: string): boolean {
+    return normalizedMap.has(normalizeSygnatura(ref));
+  }
 
   // Step 1: Process bracket groups — extract, validate, rebuild.
   // Match any [...] that contains at least one "KIO" reference.
@@ -245,8 +264,8 @@ function validateSygnaturaRefs(
     const notResolvable: string[] = [];
 
     for (const { ref } of refs) {
-      const normalized = ref.replace(/\s+/g, " ").trim();
-      if (normalized in sygnaturaMap) {
+      const normalized = normalizeSygnatura(ref);
+      if (resolves(normalized)) {
         resolvable.push(normalized);
       } else {
         notResolvable.push(normalized);
@@ -283,8 +302,8 @@ function validateSygnaturaRefs(
     const { ref, start, end } = bareRefs[i];
     if (isInsideBracket(start)) continue; // already in brackets
 
-    const normalized = ref.replace(/\s+/g, " ").trim();
-    if (normalized in sygnaturaMap) {
+    const normalized = normalizeSygnatura(ref);
+    if (resolves(normalized)) {
       // Wrap in brackets
       processed = processed.slice(0, start) + `[${normalized}]` + processed.slice(end);
     } else {

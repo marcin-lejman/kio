@@ -13,6 +13,7 @@ export function DebugPanel({ debug }: { debug: DebugData }) {
     { id: "vector", label: `Vector (${debug.vector_results?.length ?? 0})` },
     { id: "fused", label: `Fused (${debug.fused_results?.length ?? 0})` },
     { id: "reranked", label: `Reranked (${debug.reranked_results?.length ?? 0})` },
+    ...(debug.answer_prompt ? [{ id: "prompt", label: "Answer Prompt" }] : []),
   ];
 
   return (
@@ -134,6 +135,19 @@ export function DebugPanel({ debug }: { debug: DebugData }) {
                       <span className="text-orange-500">was #{r.original_rank + 1}</span>
                     )}
                   </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {section === "prompt" && debug.answer_prompt && (
+            <div className="space-y-2 max-h-[600px] overflow-y-auto">
+              {debug.answer_prompt.map((msg, i) => (
+                <div key={i}>
+                  <h4 className="text-xs font-semibold text-orange-900 mb-1 uppercase">{msg.role}</h4>
+                  <pre className="text-xs bg-white rounded p-2 overflow-x-auto whitespace-pre-wrap border border-orange-200">
+{msg.content}
+                  </pre>
                 </div>
               ))}
             </div>
