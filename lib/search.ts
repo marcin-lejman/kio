@@ -666,6 +666,6 @@ export async function streamAnswer(
   const messages = buildAnswerMessages(userQuery, semanticQuery, chunks);
   return chatCompletionStream(messages, answerModel, {
     temperature: 0.2,
-    max_tokens: 3000,
+    max_tokens: 8000,
   });
 }
