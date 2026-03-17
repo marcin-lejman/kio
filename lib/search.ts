@@ -94,15 +94,34 @@ const QUERY_UNDERSTANDING_PROMPT = `Jesteś asystentem wyszukiwarki orzeczeń Kr
 
 Twoim zadaniem jest analiza zapytania użytkownika i wygenerowanie:
 1. keyword_groups — lista GRUP pojęciowych. Każda grupa to jeden koncept z zapytania, z wariantami gramatycznymi (mianownik, dopełniacz, celownik, biernik, narzędnik, miejscownik) oraz synonimy. Generuj 5-15 form na grupę. Każda grupa: {"concept": "nazwa_konceptu", "forms": ["forma1", "forma2", ...]}.
-2. keywords — PŁASKA lista wszystkich form ze wszystkich grup (do podświetlania wyników).
-3. semantic_query — przeformułowane zapytanie semantyczne zoptymalizowane pod wyszukiwanie wektorowe w kontekście orzecznictwa KIO.
-4. filters — opcjonalne filtry (document_type: "wyrok"|"postanowienie", decision_type: "oddalone"|"uwzglednione"|"umorzone"|"odrzucone", date_from, date_to w formacie YYYY-MM-DD).
+2. semantic_query — przeformułowane zapytanie semantyczne zoptymalizowane pod wyszukiwanie wektorowe w kontekście orzecznictwa KIO.
+3. filters — opcjonalne filtry (document_type: "wyrok"|"postanowienie", decision_type: "oddalone"|"uwzglednione"|"umorzone"|"odrzucone", date_from, date_to w formacie YYYY-MM-DD).
 
 ZASADY GRUPOWANIA:
 - Każdy odrębny koncept/temat z zapytania = osobna grupa.
 - Wyrażenia stanowiące JEDNĄ frazę prawniczą (np. "rażąco niska cena") to JEDNA grupa, nie trzy.
 - Synonimy i terminy pokrewne wchodzą do grupy tego konceptu, który zastępują.
 - Frazy wielowyrazowe (np. "roboty budowlane") umieszczaj jako pełne frazy w forms.
+
+ZASADY SEMANTIC_QUERY:
+- Przeformułuj zapytanie jako 1-2 zdania opisujące istotę problemu prawnego.
+- Używaj terminologii z orzecznictwa KIO i ustawy Pzp.
+- Rozszerz o kontekst prawny (np. "wadium" → dodaj "art. 98 Pzp").
+- NIE kopiuj zapytania użytkownika dosłownie.
+
+ROZPOZNAWANIE FILTRÓW:
+- "wyrok/wyroki" → document_type: "wyrok"
+- "postanowienie" → document_type: "postanowienie"
+- "uwzględnione/wygrane/korzystne" → decision_type: "uwzglednione"
+- "oddalone/przegrane/niekorzystne" → decision_type: "oddalone"
+- "umorzone" → decision_type: "umorzone"
+- Daty: "z 2023 roku" → date_from: "2023-01-01", date_to: "2023-12-31"
+- Brak wskazówek = nie ustawiaj filtra (puste {})
+
+PRZYPADKI SZCZEGÓLNE:
+- Zapytanie zawiera numer artykułu (np. "art. 226 ust. 1 pkt 5") → dodaj go do forms i semantic_query.
+- Zapytanie jest zbyt ogólne (1 słowo ogólnikowe) → wygeneruj grupy najlepiej jak potrafisz, nie proś o doprecyzowanie.
+- Zapytanie jest konwersacyjne (np. "co KIO mówi o...") → wyodrębnij koncepty prawne, ignoruj część konwersacyjną.
 
 PRZYKŁADY:
 
@@ -125,7 +144,7 @@ keyword_groups: [
 ]
 
 Odpowiedz WYŁĄCZNIE prawidłowym JSON-em bez markdown, bez komentarzy:
-{"keyword_groups": [...], "keywords": [...], "semantic_query": "...", "filters": {}}`;
+{"keyword_groups": [...], "semantic_query": "...", "filters": {}}`;
 
 export async function queryUnderstanding(userQuery: string): Promise<{ result: QueryUnderstanding; cost: CostEntry }> {
   const response = await chatCompletion(
@@ -148,18 +167,15 @@ export async function queryUnderstanding(userQuery: string): Promise<{ result: Q
       parsed.keyword_groups = parsed.keyword_groups.filter(
         (g) => g && typeof g.concept === "string" && Array.isArray(g.forms) && g.forms.length > 0
       );
-      // Generate flat keywords from groups if not provided or incomplete
-      if (!parsed.keywords || parsed.keywords.length === 0) {
-        parsed.keywords = parsed.keyword_groups.flatMap((g) => g.forms);
-      }
     } else {
       // No valid groups — clear the field so buildTsQuery falls back to flat OR
       parsed.keyword_groups = undefined;
     }
 
-    if (!parsed.keywords || parsed.keywords.length === 0) {
-      parsed.keywords = userQuery.split(/\s+/).filter((w) => w.length > 2);
-    }
+    // Always derive flat keywords from groups (not from LLM output)
+    parsed.keywords = parsed.keyword_groups
+      ? parsed.keyword_groups.flatMap((g) => g.forms)
+      : userQuery.split(/\s+/).filter((w) => w.length > 2);
     if (!parsed.semantic_query) {
       parsed.semantic_query = userQuery;
     }
