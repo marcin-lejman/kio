@@ -147,13 +147,13 @@ keyword_groups: [
 Odpowiedz WYŁĄCZNIE prawidłowym JSON-em bez markdown, bez komentarzy:
 {"keyword_groups": [...], "semantic_query": "...", "filters": {}}`;
 
-export async function queryUnderstanding(userQuery: string): Promise<{ result: QueryUnderstanding; cost: CostEntry }> {
+export async function queryUnderstanding(userQuery: string, model?: string): Promise<{ result: QueryUnderstanding; cost: CostEntry }> {
   const response = await chatCompletion(
     [
       { role: "system", content: QUERY_UNDERSTANDING_PROMPT },
       { role: "user", content: userQuery },
     ],
-    MODELS.QUERY_UNDERSTANDING,
+    model || MODELS.QUERY_UNDERSTANDING,
     { temperature: 0.1, max_tokens: 1024 }
   );
 
@@ -738,6 +738,7 @@ export async function searchBase(
   userQuery: string,
   filters?: SearchFilters,
   onStatus?: (status: string) => void,
+  queryModel?: string,
 ): Promise<SearchBaseResult> {
   const startTime = Date.now();
   const costs: CostEntry[] = [];
@@ -745,7 +746,7 @@ export async function searchBase(
 
   // Layer 1: Query Understanding
   onStatus?.("query_understanding");
-  const { result: understanding, cost: l1Cost } = await queryUnderstanding(userQuery);
+  const { result: understanding, cost: l1Cost } = await queryUnderstanding(userQuery, queryModel);
   costs.push(l1Cost);
   totalTokens += l1Cost.input_tokens + l1Cost.output_tokens;
 

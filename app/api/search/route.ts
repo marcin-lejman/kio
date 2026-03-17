@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
           // Layers 1-2: search + rank (inside stream so we can emit status events)
           const base = await searchBase(query.trim(), filters, (status) => {
             send("status", { step: status });
-          });
+          }, selectedModel);
 
           // Send search results immediately
           send("results", {
