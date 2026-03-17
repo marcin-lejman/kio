@@ -15,6 +15,7 @@ import type {
   SearchMetadataType,
   DebugData,
 } from "@/components/search";
+import { parseSygnatura } from "@/lib/sygnatura";
 
 interface SavedSearch {
   id: number;
@@ -352,10 +353,29 @@ export default function SearchResultPage() {
   // ------------------------------------------------------------------
 
   const handleSearch = useCallback(
-    (query: string, filters: SearchFilters, answerModel: string) => {
+    async (query: string, filters: SearchFilters, answerModel: string) => {
+      const syg = parseSygnatura(query);
+      if (syg) {
+        setSearchStatus("query_understanding");
+        try {
+          const res = await fetch(
+            `/api/verdict/by-sygnatura?q=${encodeURIComponent(syg)}`
+          );
+          const data = await res.json();
+          if (data.found) {
+            router.push(`/verdict/${data.verdict_id}`);
+            return;
+          }
+        } catch {
+          // fall through to normal search
+        } finally {
+          setSearchStatus(null);
+        }
+      }
+
       executeSearch(query, filters, answerModel);
     },
-    [executeSearch]
+    [executeSearch, router]
   );
 
   // ------------------------------------------------------------------

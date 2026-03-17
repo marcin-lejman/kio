@@ -57,6 +57,12 @@ export default function RootLayout({
                   >
                     Historia
                   </Link>
+                  <Link
+                    href="/ustawienia"
+                    className="text-sm text-muted hover:text-foreground transition-colors"
+                  >
+                    Ustawienia
+                  </Link>
                 </div>
               </div>
             </div>
