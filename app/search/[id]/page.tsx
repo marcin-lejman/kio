@@ -32,60 +32,144 @@ interface SavedSearch {
   created_at: string;
 }
 
-export default function SavedSearchPage() {
+// ---------------------------------------------------------------------------
+// Progressive search status UI
+// ---------------------------------------------------------------------------
+
+const STATUS_LABELS: Record<string, string> = {
+  query_understanding: "Przygotowuję zapytania do bazy danych",
+  searching: "Przeszukuję bazę danych",
+  reranking: "Udoskonalam wyniki",
+};
+
+const STATUS_ORDER = ["query_understanding", "searching", "reranking"];
+
+function SearchProgress({ currentStep }: { currentStep: string }) {
+  const currentIndex = STATUS_ORDER.indexOf(currentStep);
+
+  return (
+    <div className="flex flex-col items-center justify-center py-16 gap-4">
+      <div className="h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+      <div className="flex flex-col gap-2">
+        {STATUS_ORDER.map((key, i) => {
+          const isDone = currentIndex >= 0 && i < currentIndex;
+          const isCurrent = i === currentIndex;
+
+          return (
+            <div
+              key={key}
+              className={`flex items-center gap-2 text-sm transition-all duration-300 ${
+                isDone
+                  ? "text-muted"
+                  : isCurrent
+                  ? "text-primary font-medium"
+                  : "text-muted/40"
+              }`}
+            >
+              {isDone ? (
+                <svg
+                  className="h-4 w-4 text-accent flex-shrink-0"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2.5}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M5 13l4 4L19 7"
+                  />
+                </svg>
+              ) : isCurrent ? (
+                <span className="inline-block h-2 w-2 rounded-full bg-accent animate-pulse ml-1 mr-1 flex-shrink-0" />
+              ) : (
+                <span className="inline-block h-2 w-2 rounded-full bg-muted/20 ml-1 mr-1 flex-shrink-0" />
+              )}
+              {STATUS_LABELS[key]}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Page component
+// ---------------------------------------------------------------------------
+
+export default function SearchResultPage() {
   const params = useParams();
   const router = useRouter();
   const searchId = params.id as string;
+  const isPending = searchId === "pending";
+
+  // Read pending search data synchronously on first render so SearchBar
+  // can be initialised with the correct query immediately.
+  const pendingDataRef = useRef<{
+    query: string;
+    filters: SearchFilters;
+    answerModel: string;
+  } | null | undefined>(undefined);
+
+  if (isPending && pendingDataRef.current === undefined) {
+    try {
+      const json =
+        typeof window !== "undefined"
+          ? sessionStorage.getItem("pending_search")
+          : null;
+      pendingDataRef.current = json ? JSON.parse(json) : null;
+    } catch {
+      pendingDataRef.current = null;
+    }
+  }
 
   // Saved search state
   const [saved, setSaved] = useState<SavedSearch | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [pageLoading, setPageLoading] = useState(true);
+  const [pageLoading, setPageLoading] = useState(!isPending);
 
-  // Live search state (when re-searching from this page)
-  const [liveVerdicts, setLiveVerdicts] = useState<VerdictResult[] | null>(null);
-  const [liveSygnaturaMap, setLiveSygnaturaMap] = useState<Record<string, number> | null>(null);
+  // Search execution state
+  const [searchStatus, setSearchStatus] = useState<string | null>(
+    isPending ? "query_understanding" : null
+  );
+  const [searchError, setSearchError] = useState<string | null>(null);
+
+  // Live results
+  const [liveVerdicts, setLiveVerdicts] = useState<VerdictResult[] | null>(
+    null
+  );
+  const [liveSygnaturaMap, setLiveSygnaturaMap] = useState<Record<
+    string,
+    number
+  > | null>(null);
   const [liveAiOverview, setLiveAiOverview] = useState<string | null>(null);
   const [liveAiStreaming, setLiveAiStreaming] = useState(false);
   const [liveAiError, setLiveAiError] = useState(false);
   const [liveUnresolvedRefs, setLiveUnresolvedRefs] = useState<string[]>([]);
-  const [liveMetadata, setLiveMetadata] = useState<SearchMetadataType | null>(null);
+  const [liveMetadata, setLiveMetadata] = useState<SearchMetadataType | null>(
+    null
+  );
   const [liveDebug, setLiveDebug] = useState<DebugData | null>(null);
-  const [searchLoading, setSearchLoading] = useState(false);
-  const [searchError, setSearchError] = useState<string | null>(null);
+
   const [visibleCount, setVisibleCount] = useState(15);
   const abortRef = useRef<AbortController | null>(null);
   const pendingSearchIdRef = useRef<number | null>(null);
 
-  // Is showing live results or saved?
   const isLive = liveVerdicts !== null;
+  const isSearching = searchStatus !== null;
 
-  useEffect(() => {
-    async function loadSearch() {
-      try {
-        const res = await fetch(`/api/search/${searchId}`);
-        if (!res.ok) {
-          setLoadError(res.status === 404 ? "Wyszukiwanie nie zostało znalezione." : "Nie udało się załadować wyników.");
-          return;
-        }
-        const data: SavedSearch = await res.json();
-        setSaved(data);
-      } catch {
-        setLoadError("Nie udało się załadować wyników.");
-      } finally {
-        setPageLoading(false);
-      }
-    }
-    loadSearch();
-  }, [searchId]);
+  // ------------------------------------------------------------------
+  // Core search execution (used by both pending init and re-search)
+  // ------------------------------------------------------------------
 
-  const handleSearch = useCallback(
+  const executeSearch = useCallback(
     async (query: string, filters: SearchFilters, answerModel: string) => {
       abortRef.current?.abort();
       const abort = new AbortController();
       abortRef.current = abort;
 
-      setSearchLoading(true);
+      setSearchStatus("query_understanding");
       setSearchError(null);
       setLiveVerdicts(null);
       setLiveSygnaturaMap(null);
@@ -97,11 +181,17 @@ export default function SavedSearchPage() {
       setLiveDebug(null);
       setVisibleCount(15);
 
+      let hasReceivedResults = false;
+
       try {
         const response = await fetch("/api/search", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query, filters, answer_model: answerModel }),
+          body: JSON.stringify({
+            query,
+            filters,
+            answer_model: answerModel,
+          }),
           signal: abort.signal,
         });
 
@@ -113,6 +203,8 @@ export default function SavedSearchPage() {
         const reader = response.body!.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
+        // Persist across reads so split event:/data: lines still pair up
+        let currentEvent = "";
 
         while (true) {
           const { done, value } = await reader.read();
@@ -122,7 +214,6 @@ export default function SavedSearchPage() {
           const lines = buffer.split("\n");
           buffer = lines.pop() || "";
 
-          let currentEvent = "";
           for (const line of lines) {
             if (line.startsWith("event: ")) {
               currentEvent = line.slice(7);
@@ -131,12 +222,15 @@ export default function SavedSearchPage() {
               try {
                 const parsed = JSON.parse(data);
 
-                if (currentEvent === "results") {
+                if (currentEvent === "status") {
+                  setSearchStatus(parsed.step);
+                } else if (currentEvent === "results") {
+                  hasReceivedResults = true;
                   setLiveVerdicts(parsed.verdicts);
                   setLiveSygnaturaMap(parsed.sygnatura_map || {});
                   setLiveMetadata(parsed.metadata);
                   setLiveDebug(parsed.debug);
-                  setSearchLoading(false);
+                  setSearchStatus(null);
                   setLiveAiStreaming(true);
                 } else if (currentEvent === "token") {
                   setLiveAiOverview((prev) => (prev || "") + parsed);
@@ -153,8 +247,15 @@ export default function SavedSearchPage() {
                     pendingSearchIdRef.current = parsed.search_id;
                   }
                 } else if (currentEvent === "error") {
-                  setLiveAiStreaming(false);
-                  setLiveAiError(true);
+                  setSearchStatus(null);
+                  if (!hasReceivedResults) {
+                    setSearchError(
+                      parsed.message || "Wystąpił błąd wyszukiwania"
+                    );
+                  } else {
+                    setLiveAiStreaming(false);
+                    setLiveAiError(true);
+                  }
                 }
               } catch {
                 // skip unparseable
@@ -164,24 +265,104 @@ export default function SavedSearchPage() {
         }
       } catch (err) {
         if (abort.signal.aborted) return;
-        setSearchError(err instanceof Error ? err.message : "Wystąpił błąd");
+        setSearchError(
+          err instanceof Error ? err.message : "Wystąpił błąd"
+        );
+        setSearchStatus(null);
       } finally {
         if (!abort.signal.aborted) {
-          setSearchLoading(false);
+          setSearchStatus(null);
           setLiveAiStreaming(false);
-          // Navigate to the new saved search page after stream is fully complete
           if (pendingSearchIdRef.current) {
-            router.replace(`/search/${pendingSearchIdRef.current}`, { scroll: false });
+            // Use replaceState instead of router.replace to avoid
+            // unmounting the component (which would lose live state).
+            window.history.replaceState(
+              null,
+              "",
+              `/search/${pendingSearchIdRef.current}`
+            );
             pendingSearchIdRef.current = null;
           }
         }
       }
     },
-    [router]
+    []
   );
 
-  // Loading state
-  if (pageLoading) {
+  // ------------------------------------------------------------------
+  // Pending search: read sessionStorage and start search
+  // ------------------------------------------------------------------
+
+  useEffect(() => {
+    if (!isPending) return;
+
+    const data = pendingDataRef.current;
+    if (!data) {
+      router.replace("/");
+      return;
+    }
+
+    sessionStorage.removeItem("pending_search");
+    executeSearch(data.query, data.filters || {}, data.answerModel || "");
+
+    return () => {
+      abortRef.current?.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ------------------------------------------------------------------
+  // Load saved search (for non-pending pages)
+  // ------------------------------------------------------------------
+
+  useEffect(() => {
+    if (isPending) return;
+
+    async function loadSearch() {
+      try {
+        const res = await fetch(`/api/search/${searchId}`);
+        if (!res.ok) {
+          setLoadError(
+            res.status === 404
+              ? "Wyszukiwanie nie zostało znalezione."
+              : "Nie udało się załadować wyników."
+          );
+          return;
+        }
+        const data: SavedSearch = await res.json();
+        setSaved(data);
+      } catch {
+        setLoadError("Nie udało się załadować wyników.");
+      } finally {
+        setPageLoading(false);
+      }
+    }
+    loadSearch();
+  }, [searchId, isPending]);
+
+  // Abort on unmount
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
+
+  // ------------------------------------------------------------------
+  // Re-search handler (from SearchBar on this page)
+  // ------------------------------------------------------------------
+
+  const handleSearch = useCallback(
+    (query: string, filters: SearchFilters, answerModel: string) => {
+      executeSearch(query, filters, answerModel);
+    },
+    [executeSearch]
+  );
+
+  // ------------------------------------------------------------------
+  // Render: loading saved search
+  // ------------------------------------------------------------------
+
+  if (pageLoading && !isPending && !isLive) {
     return (
       <div className="mx-auto max-w-4xl px-4 py-8">
         <div className="flex flex-col items-center justify-center py-16 gap-3">
@@ -192,8 +373,14 @@ export default function SavedSearchPage() {
     );
   }
 
-  // Error state
-  if (loadError || !saved) {
+  // Render: error loading saved search
+  if (
+    !isLive &&
+    !isSearching &&
+    !isPending &&
+    !pageLoading &&
+    (loadError || !saved)
+  ) {
     return (
       <div className="mx-auto max-w-4xl px-4 py-8">
         <div className="rounded-lg border border-error/30 bg-error/5 p-4 text-sm text-error">
@@ -203,43 +390,63 @@ export default function SavedSearchPage() {
     );
   }
 
-  // Determine what to display
-  const verdicts = isLive ? liveVerdicts! : (saved.result_data?.verdicts || []);
-  const sygnaturaMap = isLive ? (liveSygnaturaMap || {}) : (saved.result_data?.sygnatura_map || {});
-  const aiOverview = isLive ? (liveAiOverview || "") : (saved.ai_answer || "");
+  // ------------------------------------------------------------------
+  // Determine display data
+  // ------------------------------------------------------------------
+
+  const verdicts = isLive
+    ? liveVerdicts!
+    : saved?.result_data?.verdicts || [];
+  const sygnaturaMap = isLive
+    ? liveSygnaturaMap || {}
+    : saved?.result_data?.sygnatura_map || {};
+  const aiOverview = isLive
+    ? liveAiOverview || ""
+    : saved?.ai_answer || "";
   const aiStreaming = isLive ? liveAiStreaming : false;
   const aiError = isLive ? liveAiError : false;
-  const metadata = isLive ? liveMetadata : (saved.result_data?.metadata || null);
-  const debug = isLive ? liveDebug : (saved.result_data?.debug || null);
+  const metadata = isLive
+    ? liveMetadata
+    : saved?.result_data?.metadata || null;
+  const debug = isLive ? liveDebug : saved?.result_data?.debug || null;
 
-  const formattedDate = new Date(saved.created_at).toLocaleDateString("pl-PL", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const formattedDate = saved
+    ? new Date(saved.created_at).toLocaleDateString("pl-PL", {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : null;
+
+  // SearchBar initial values: from pending data or saved search
+  const searchBarQuery = isPending
+    ? pendingDataRef.current?.query || ""
+    : saved?.query || "";
+  const searchBarFilters = isPending
+    ? pendingDataRef.current?.filters || undefined
+    : saved?.filters || undefined;
+  const searchBarModel = isPending
+    ? pendingDataRef.current?.answerModel || undefined
+    : saved?.answer_model || undefined;
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-8">
       <div className="mb-8">
         <SearchBar
+          key={searchBarQuery}
           onSearch={handleSearch}
-          loading={searchLoading}
-          initialQuery={saved.query}
-          initialFilters={saved.filters || undefined}
-          initialModel={saved.answer_model || undefined}
+          loading={isSearching}
+          initialQuery={searchBarQuery}
+          initialFilters={searchBarFilters}
+          initialModel={searchBarModel}
         />
       </div>
 
-      {/* Search loading */}
-      {searchLoading && (
-        <div className="flex flex-col items-center justify-center py-16 gap-3">
-          <div className="h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent" />
-          <p className="text-sm text-muted">
-            Analizuję zapytanie i przeszukuję orzeczenia...
-          </p>
-        </div>
+      {/* Progressive search status */}
+      {isSearching && searchStatus && (
+        <SearchProgress currentStep={searchStatus} />
       )}
 
       {/* Search error */}
@@ -249,14 +456,20 @@ export default function SavedSearchPage() {
         </div>
       )}
 
-      {/* Saved results indicator + metadata (only when showing saved, not live) */}
-      {!isLive && !searchLoading && (
+      {/* Saved results indicator (only when showing saved, not live, not searching) */}
+      {!isLive && !isSearching && saved && (
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2 text-xs text-muted">
             <span>{formattedDate}</span>
-            <span>·</span>
+            <span>&middot;</span>
             <button
-              onClick={() => handleSearch(saved.query, saved.filters || {}, saved.answer_model || "")}
+              onClick={() =>
+                handleSearch(
+                  saved.query,
+                  saved.filters || {},
+                  saved.answer_model || ""
+                )
+              }
               className="text-accent hover:underline"
             >
               Odśwież wyniki
@@ -267,8 +480,14 @@ export default function SavedSearchPage() {
       )}
 
       {/* Results */}
-      {!searchLoading && verdicts.length > 0 && (
+      {!isSearching && verdicts.length > 0 && (
         <div className="space-y-6">
+          {isLive && metadata && (
+            <div className="flex justify-end">
+              <SearchMetadata metadata={metadata} />
+            </div>
+          )}
+
           <AIOverview
             overview={aiOverview}
             streaming={aiStreaming}
@@ -285,7 +504,11 @@ export default function SavedSearchPage() {
 
           <div className="space-y-3">
             {verdicts.slice(0, visibleCount).map((verdict) => (
-              <VerdictCard key={verdict.verdict_id} verdict={verdict} keywords={debug?.query_understanding?.keywords} />
+              <VerdictCard
+                key={verdict.verdict_id}
+                verdict={verdict}
+                keywords={debug?.query_understanding?.keywords}
+              />
             ))}
           </div>
 
@@ -302,7 +525,7 @@ export default function SavedSearchPage() {
         </div>
       )}
 
-      {!searchLoading && verdicts.length === 0 && !isLive && (
+      {!isSearching && verdicts.length === 0 && !isLive && saved && (
         <div className="text-center py-12">
           <p className="text-muted">
             Nie znaleziono orzeczeń pasujących do zapytania.

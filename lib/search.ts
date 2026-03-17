@@ -715,12 +715,17 @@ export interface SearchBaseResult {
   };
 }
 
-export async function searchBase(userQuery: string, filters?: SearchFilters): Promise<SearchBaseResult> {
+export async function searchBase(
+  userQuery: string,
+  filters?: SearchFilters,
+  onStatus?: (status: string) => void,
+): Promise<SearchBaseResult> {
   const startTime = Date.now();
   const costs: CostEntry[] = [];
   let totalTokens = 0;
 
   // Layer 1: Query Understanding
+  onStatus?.("query_understanding");
   const { result: understanding, cost: l1Cost } = await queryUnderstanding(userQuery);
   costs.push(l1Cost);
   totalTokens += l1Cost.input_tokens + l1Cost.output_tokens;
@@ -745,6 +750,7 @@ export async function searchBase(userQuery: string, filters?: SearchFilters): Pr
   totalTokens += embTokens;
 
   // Parallel: vector search + FTS search
+  onStatus?.("searching");
   const dbSearchStart = Date.now();
   const [vectorResults, ftsResults] = await Promise.all([
     vectorSearch(embedding, mergedFilters, 150),
@@ -763,6 +769,7 @@ export async function searchBase(userQuery: string, filters?: SearchFilters): Pr
   const fusedChunks = reciprocalRankFusion(vectorResults, ftsResults);
 
   // Layer 2.5: LLM Reranking
+  onStatus?.("reranking");
   const { reranked: rerankedChunks, cost: rerankCost, scores: rerankScores } =
     await rerankChunks(userQuery, fusedChunks);
   costs.push(rerankCost);

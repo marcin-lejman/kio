@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import ReactMarkdown, { type Components } from "react-markdown";
 
@@ -102,6 +102,27 @@ function useMarkdownComponents(sygnaturaMap: Record<string, number>): Components
   }), [sygnaturaMap]);
 }
 
+function WaitingIndicator() {
+  const startRef = useRef(Date.now());
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startRef.current) / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  return (
+    <span className="text-muted">
+      Analizuję {elapsed > 0 ? `${elapsed}` : ""}
+      <span className="inline-flex w-6 overflow-hidden align-baseline">
+        <span className="animate-ellipsis">...</span>
+      </span>
+    </span>
+  );
+}
+
 export function AIOverview({
   overview,
   streaming,
@@ -146,7 +167,7 @@ export function AIOverview({
         {overview ? (
           <ReactMarkdown components={components}>{overview}</ReactMarkdown>
         ) : streaming ? (
-          <span className="text-muted">Generuję odpowiedź...</span>
+          <WaitingIndicator />
         ) : null}
         {streaming && overview && (
           <span className="inline-block w-1.5 h-4 bg-accent/60 animate-pulse ml-0.5 align-text-bottom" />

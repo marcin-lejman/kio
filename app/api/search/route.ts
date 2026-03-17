@@ -34,9 +34,6 @@ export async function POST(request: NextRequest) {
 
     const selectedModel = answer_model || MODELS.ANSWER_GENERATION;
 
-    // Layers 1-2: search + rank
-    const base = await searchBase(query.trim(), filters);
-
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
@@ -46,80 +43,121 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        // Send search results immediately
-        send("results", {
-          query: base.query,
-          verdicts: base.verdicts,
-          sygnatura_map: base.sygnatura_map,
-          debug: base.debug,
-          metadata: {
-            time_ms: Date.now() - base.startTime,
-            tokens_used: base.totalTokens,
-            cost_usd: base.costs.reduce((s, c) => s + c.cost_usd, 0),
-            costs: base.costs,
-          },
-        });
+        try {
+          // Layers 1-2: search + rank (inside stream so we can emit status events)
+          const base = await searchBase(query.trim(), filters, (status) => {
+            send("status", { step: status });
+          });
 
-        // Layer 3: stream AI answer
-        if (base.fusedChunks.length > 0) {
-          try {
-            const { stream: llmStream, startTime: answerStart } =
-              await streamAnswer(base.query, base.semanticQuery, base.fusedChunks, selectedModel);
+          // Send search results immediately
+          send("results", {
+            query: base.query,
+            verdicts: base.verdicts,
+            sygnatura_map: base.sygnatura_map,
+            debug: base.debug,
+            metadata: {
+              time_ms: Date.now() - base.startTime,
+              tokens_used: base.totalTokens,
+              cost_usd: base.costs.reduce((s, c) => s + c.cost_usd, 0),
+              costs: base.costs,
+            },
+          });
 
-            const reader = llmStream.getReader();
-            const decoder = new TextDecoder();
-            let buffer = "";
-            let fullAnswer = "";
+          // Layer 3: stream AI answer
+          if (base.fusedChunks.length > 0) {
+            try {
+              const { stream: llmStream, startTime: answerStart } =
+                await streamAnswer(base.query, base.semanticQuery, base.fusedChunks, selectedModel);
 
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
+              const reader = llmStream.getReader();
+              const decoder = new TextDecoder();
+              let buffer = "";
+              let fullAnswer = "";
 
-              buffer += decoder.decode(value, { stream: true });
-              const lines = buffer.split("\n");
-              buffer = lines.pop() || "";
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
 
-              for (const line of lines) {
-                if (!line.startsWith("data: ")) continue;
-                const data = line.slice(6);
-                if (data === "[DONE]") continue;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split("\n");
+                buffer = lines.pop() || "";
 
-                try {
-                  const parsed = JSON.parse(data);
-                  const token = parsed.choices?.[0]?.delta?.content;
-                  if (token) {
-                    fullAnswer += token;
-                    send("token", token);
+                for (const line of lines) {
+                  if (!line.startsWith("data: ")) continue;
+                  const data = line.slice(6);
+                  if (data === "[DONE]") continue;
+
+                  try {
+                    const parsed = JSON.parse(data);
+                    const token = parsed.choices?.[0]?.delta?.content;
+                    if (token) {
+                      fullAnswer += token;
+                      send("token", token);
+                    }
+
+                    if (parsed.usage) {
+                      const usage = parsed.usage;
+                      const answerCost: CostEntry = {
+                        layer: "answer_generation",
+                        model: selectedModel,
+                        input_tokens: usage.prompt_tokens || 0,
+                        output_tokens: usage.completion_tokens || 0,
+                        cost_usd:
+                          parseFloat(usage.total_cost || "0") || estimateCost(selectedModel, usage.prompt_tokens || 0, usage.completion_tokens || 0),
+                        latency_ms: Date.now() - answerStart,
+                      };
+                      base.costs.push(answerCost);
+                      base.totalTokens +=
+                        (usage.prompt_tokens || 0) +
+                        (usage.completion_tokens || 0);
+                    }
+                  } catch {
+                    // skip unparseable SSE lines
                   }
-
-                  if (parsed.usage) {
-                    const usage = parsed.usage;
-                    const answerCost: CostEntry = {
-                      layer: "answer_generation",
-                      model: selectedModel,
-                      input_tokens: usage.prompt_tokens || 0,
-                      output_tokens: usage.completion_tokens || 0,
-                      cost_usd:
-                        parseFloat(usage.total_cost || "0") || estimateCost(selectedModel, usage.prompt_tokens || 0, usage.completion_tokens || 0),
-                      latency_ms: Date.now() - answerStart,
-                    };
-                    base.costs.push(answerCost);
-                    base.totalTokens +=
-                      (usage.prompt_tokens || 0) +
-                      (usage.completion_tokens || 0);
-                  }
-                } catch {
-                  // skip unparseable SSE lines
                 }
               }
-            }
 
-            // Validate and fix sygnatura references in the AI answer
-            const { fixed, unresolved } = validateSygnaturaRefs(fullAnswer, base.sygnatura_map);
-            if (unresolved.length > 0) {
-              console.warn("Unresolvable sygnatura refs in AI answer:", unresolved);
-            }
+              // Validate and fix sygnatura references in the AI answer
+              const { fixed, unresolved } = validateSygnaturaRefs(fullAnswer, base.sygnatura_map);
+              if (unresolved.length > 0) {
+                console.warn("Unresolvable sygnatura refs in AI answer:", unresolved);
+              }
 
+              const finalMetadata = {
+                time_ms: Date.now() - base.startTime,
+                tokens_used: base.totalTokens,
+                cost_usd: base.costs.reduce((s, c) => s + c.cost_usd, 0),
+                costs: base.costs,
+              };
+
+              // Save to database and get the search_id
+              const searchId = await saveSearchHistory({
+                query: base.query,
+                filters: filters || null,
+                verdicts: base.verdicts,
+                sygnatura_map: base.sygnatura_map,
+                debug: base.debug,
+                ai_overview: fixed,
+                ai_overview_status: "verified",
+                answer_model: selectedModel,
+                metadata: finalMetadata,
+              });
+
+              send("done", {
+                ai_overview: fixed,
+                metadata: finalMetadata,
+                search_id: searchId,
+                unresolved_refs: unresolved.length > 0 ? unresolved : undefined,
+              });
+
+              saveCostLog(base.costs, searchId).catch((err) =>
+                console.error("Failed to save cost log:", err)
+              );
+            } catch (error) {
+              console.error("AI generation error:", error);
+              send("error", { message: "AI generation failed" });
+            }
+          } else {
             const finalMetadata = {
               time_ms: Date.now() - base.startTime,
               tokens_used: base.totalTokens,
@@ -127,58 +165,27 @@ export async function POST(request: NextRequest) {
               costs: base.costs,
             };
 
-            // Save to database and get the search_id
             const searchId = await saveSearchHistory({
               query: base.query,
               filters: filters || null,
               verdicts: base.verdicts,
               sygnatura_map: base.sygnatura_map,
               debug: base.debug,
-              ai_overview: fixed,
+              ai_overview: null,
               ai_overview_status: "verified",
               answer_model: selectedModel,
               metadata: finalMetadata,
             });
 
             send("done", {
-              ai_overview: fixed,
+              ai_overview: null,
               metadata: finalMetadata,
               search_id: searchId,
-              unresolved_refs: unresolved.length > 0 ? unresolved : undefined,
             });
-
-            saveCostLog(base.costs, searchId).catch((err) =>
-              console.error("Failed to save cost log:", err)
-            );
-          } catch (error) {
-            console.error("AI generation error:", error);
-            send("error", { message: "AI generation failed" });
           }
-        } else {
-          const finalMetadata = {
-            time_ms: Date.now() - base.startTime,
-            tokens_used: base.totalTokens,
-            cost_usd: base.costs.reduce((s, c) => s + c.cost_usd, 0),
-            costs: base.costs,
-          };
-
-          const searchId = await saveSearchHistory({
-            query: base.query,
-            filters: filters || null,
-            verdicts: base.verdicts,
-            sygnatura_map: base.sygnatura_map,
-            debug: base.debug,
-            ai_overview: null,
-            ai_overview_status: "verified",
-            answer_model: selectedModel,
-            metadata: finalMetadata,
-          });
-
-          send("done", {
-            ai_overview: null,
-            metadata: finalMetadata,
-            search_id: searchId,
-          });
+        } catch (error) {
+          console.error("Search error:", error);
+          send("error", { message: "Search failed. Please try again." });
         }
 
         controller.close();
@@ -193,10 +200,10 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
-    console.error("Search error:", error);
+    console.error("Request parsing error:", error);
     return new Response(
-      JSON.stringify({ error: "Search failed. Please try again." }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
+      JSON.stringify({ error: "Invalid request" }),
+      { status: 400, headers: { "Content-Type": "application/json" } }
     );
   }
 }
