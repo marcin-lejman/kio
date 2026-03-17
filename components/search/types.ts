@@ -8,6 +8,7 @@ export interface SearchFilters {
 export interface MatchingPassage {
   chunk_text: string;
   section_label: string;
+  chunk_position: number;
   score: number;
 }
 

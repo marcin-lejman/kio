@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useEffect, useState, useMemo, Suspense } from "react";
+import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { buildKeywordPattern, highlightKeywords } from "@/lib/highlight";
 
 interface VerdictDetail {
   id: number;
@@ -41,14 +42,27 @@ function MetadataItem({ label, value }: { label: string; value: string | null | 
   );
 }
 
-export default function VerdictPage() {
+function VerdictContent() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const id = params.id as string;
+  const targetChunk = searchParams.get("chunk");
+  const hlKeywords = useMemo(
+    () => searchParams.get("hl")?.split(",").filter(Boolean) || [],
+    [searchParams]
+  );
+  const hlPattern = useMemo(
+    () => buildKeywordPattern(hlKeywords),
+    [hlKeywords]
+  );
+
   const [verdict, setVerdict] = useState<VerdictDetail | null>(null);
   const [chunks, setChunks] = useState<Chunk[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<"text" | "html" | "chunks">("html");
+  const [viewMode, setViewMode] = useState<"text" | "html" | "chunks">(
+    targetChunk ? "chunks" : "html"
+  );
 
   useEffect(() => {
     async function fetchVerdict() {
@@ -66,6 +80,17 @@ export default function VerdictPage() {
     }
     fetchVerdict();
   }, [id]);
+
+  // Scroll to target chunk after data loads
+  useEffect(() => {
+    if (!targetChunk || chunks.length === 0 || viewMode !== "chunks") return;
+    const el = document.getElementById(`chunk-${targetChunk}`);
+    if (el) {
+      requestAnimationFrame(() => {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+    }
+  }, [chunks, targetChunk, viewMode]);
 
   if (loading) {
     return (
@@ -156,32 +181,42 @@ export default function VerdictPage() {
 
           {viewMode === "chunks" && (
             <div className="space-y-3">
-              {chunks.map((chunk) => (
-                <div
-                  key={chunk.id}
-                  className="rounded-lg border border-border bg-card p-4"
-                >
-                  <div className="flex items-center gap-3 mb-2">
-                    <span className="text-xs font-medium text-accent bg-accent/10 px-2 py-0.5 rounded">
-                      {chunk.section_label}
-                    </span>
-                    <span className="text-xs text-muted">
-                      Fragment {chunk.chunk_position}/{chunk.total_chunks}
-                    </span>
-                    <span className="text-xs text-muted">
-                      {chunk.token_count} tokenów
-                    </span>
-                  </div>
-                  {chunk.preamble && (
-                    <p className="text-xs text-muted italic mb-2">
-                      {chunk.preamble}
+              {chunks.map((chunk) => {
+                const isTarget = String(chunk.chunk_position) === targetChunk;
+                return (
+                  <div
+                    key={chunk.id}
+                    id={`chunk-${chunk.chunk_position}`}
+                    className={`rounded-lg border bg-card p-4 transition-colors ${
+                      isTarget
+                        ? "border-accent ring-2 ring-accent/20"
+                        : "border-border"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 mb-2">
+                      <span className="text-xs font-medium text-accent bg-accent/10 px-2 py-0.5 rounded">
+                        {chunk.section_label}
+                      </span>
+                      <span className="text-xs text-muted">
+                        Fragment {chunk.chunk_position}/{chunk.total_chunks}
+                      </span>
+                      <span className="text-xs text-muted">
+                        {chunk.token_count} tokenów
+                      </span>
+                    </div>
+                    {chunk.preamble && (
+                      <p className="text-xs text-muted italic mb-2">
+                        {chunk.preamble}
+                      </p>
+                    )}
+                    <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                      {isTarget && hlPattern
+                        ? highlightKeywords(chunk.chunk_text, hlPattern)
+                        : chunk.chunk_text}
                     </p>
-                  )}
-                  <p className="text-sm leading-relaxed whitespace-pre-wrap">
-                    {chunk.chunk_text}
-                  </p>
-                </div>
-              ))}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -260,5 +295,19 @@ export default function VerdictPage() {
         </aside>
       </div>
     </div>
+  );
+}
+
+export default function VerdictPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center py-16">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+        </div>
+      }
+    >
+      <VerdictContent />
+    </Suspense>
   );
 }

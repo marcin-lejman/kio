@@ -93,9 +93,9 @@ function useMarkdownComponents(sygnaturaMap: Record<string, number>): Components
     em: ({ children }) => <em>{processChildren(children, sygnaturaMap)}</em>,
     ul: ({ children }) => <ul className="list-disc pl-5 mb-3 space-y-1">{children}</ul>,
     ol: ({ children }) => <ol className="list-decimal pl-5 mb-3 space-y-1">{children}</ol>,
-    h1: ({ children }) => <h3 className="font-semibold text-base mb-2 mt-4 first:mt-0">{children}</h3>,
-    h2: ({ children }) => <h3 className="font-semibold text-base mb-2 mt-4 first:mt-0">{children}</h3>,
-    h3: ({ children }) => <h4 className="font-semibold text-sm mb-2 mt-3 first:mt-0">{children}</h4>,
+    h1: ({ children }) => <h3 className="font-semibold text-base mb-2 mt-4 first:mt-0">{processChildren(children, sygnaturaMap)}</h3>,
+    h2: ({ children }) => <h3 className="font-semibold text-base mb-2 mt-4 first:mt-0">{processChildren(children, sygnaturaMap)}</h3>,
+    h3: ({ children }) => <h4 className="font-semibold text-sm mb-2 mt-3 first:mt-0">{processChildren(children, sygnaturaMap)}</h4>,
     blockquote: ({ children }) => (
       <blockquote className="border-l-2 border-accent/40 pl-3 my-2 text-muted italic">{children}</blockquote>
     ),

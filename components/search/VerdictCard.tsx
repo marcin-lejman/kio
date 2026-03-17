@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import Link from "next/link";
 import type { VerdictResult } from "./types";
+import { buildKeywordPattern, highlightKeywords } from "@/lib/highlight";
 
 const decisionLabel: Record<string, string> = {
   oddalone: "Oddalone",
@@ -63,19 +64,6 @@ function formatSygnatura(syg: string): string {
 }
 
 /**
- * Build a keyword regex from the keywords list.
- * Sorts by length descending so longer phrases match first.
- */
-function buildKeywordPattern(keywords: string[]): RegExp | null {
-  const sorted = [...keywords]
-    .filter((k) => k.length >= 2)
-    .sort((a, b) => b.length - a.length);
-  if (sorted.length === 0) return null;
-  const escaped = sorted.map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  return new RegExp(`(${escaped.join("|")})`, "gi");
-}
-
-/**
  * Extract a KWIC (Keyword-in-Context) snippet centered around the first
  * keyword match. If no keywords match, falls back to the first N characters.
  */
@@ -125,41 +113,25 @@ function extractSnippet(
   return prefix + text.slice(start, end) + suffix;
 }
 
-/**
- * Highlight keyword matches in text. Returns React nodes with matches
- * wrapped in <mark>.
- */
-function highlightKeywords(
-  text: string,
-  pattern: RegExp | null
-): React.ReactNode[] {
-  if (!pattern) return [text];
-
-  pattern.lastIndex = 0;
-  const parts: React.ReactNode[] = [];
-  let lastIndex = 0;
-  let match;
-
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(text.slice(lastIndex, match.index));
+function buildVerdictLink(
+  verdictId: number,
+  chunkPosition: number,
+  keywords?: string[]
+): string {
+  const params = new URLSearchParams();
+  params.set("chunk", String(chunkPosition));
+  if (keywords && keywords.length > 0) {
+    // Split multi-word phrases into individual words for independent matching
+    const words = new Set<string>();
+    for (const kw of keywords) {
+      for (const w of kw.split(/\s+/)) {
+        if (w.length >= 3) words.add(w);
+      }
     }
-    parts.push(
-      <mark
-        key={match.index}
-        className="bg-yellow-200/70 text-foreground rounded-sm"
-      >
-        {match[0]}
-      </mark>
-    );
-    lastIndex = match.index + match[0].length;
+    const sorted = [...words].sort((a, b) => b.length - a.length);
+    params.set("hl", sorted.slice(0, 20).join(","));
   }
-
-  if (lastIndex < text.length) {
-    parts.push(text.slice(lastIndex));
-  }
-
-  return parts;
+  return `/verdict/${verdictId}?${params.toString()}`;
 }
 
 export function VerdictCard({
@@ -185,7 +157,7 @@ export function VerdictCard({
           {/* Header row */}
           <div className="flex items-baseline gap-2 flex-wrap">
             <Link
-              href={`/verdict/${verdict.verdict_id}`}
+              href={topPassage ? buildVerdictLink(verdict.verdict_id, topPassage.chunk_position, keywords) : `/verdict/${verdict.verdict_id}`}
               className="text-base font-semibold text-accent hover:underline"
             >
               {formatSygnatura(verdict.sygnatura)}
@@ -215,21 +187,28 @@ export function VerdictCard({
 
           {/* Top passage snippet */}
           {topPassage && (
-            <div className="mt-2.5 border-l-2 border-accent/20 pl-3">
+            <Link
+              href={buildVerdictLink(verdict.verdict_id, topPassage.chunk_position, keywords)}
+              className="block mt-2.5 border-l-2 border-accent/20 pl-3 hover:border-accent/50 transition-colors"
+            >
               <span className="text-[11px] font-medium text-accent/70 uppercase tracking-wide">
                 {humanSectionLabel(topPassage.section_label)}
               </span>
               <p className="mt-0.5 text-sm text-foreground/70 leading-relaxed line-clamp-3">
                 {highlightKeywords(topSnippet, pattern)}
               </p>
-            </div>
+            </Link>
           )}
 
           {/* Expanded passages */}
           {expanded && verdict.matching_passages.length > 1 && (
             <div className="mt-3 space-y-2.5 border-t border-border pt-3">
               {verdict.matching_passages.slice(1).map((p, i) => (
-                <div key={i} className="border-l-2 border-border pl-3">
+                <Link
+                  key={i}
+                  href={buildVerdictLink(verdict.verdict_id, p.chunk_position, keywords)}
+                  className="block border-l-2 border-border pl-3 hover:border-accent/50 transition-colors"
+                >
                   <span className="text-[11px] font-medium text-muted uppercase tracking-wide">
                     {humanSectionLabel(p.section_label)}
                   </span>
@@ -239,7 +218,7 @@ export function VerdictCard({
                       pattern
                     )}
                   </p>
-                </div>
+                </Link>
               ))}
             </div>
           )}

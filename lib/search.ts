@@ -55,6 +55,7 @@ export interface VerdictResult {
   matching_passages: {
     chunk_text: string;
     section_label: string;
+    chunk_position: number;
     score: number;
   }[];
 }
@@ -592,6 +593,7 @@ function groupByVerdict(chunks: ChunkResult[], maxVerdicts: number = 15): Verdic
       existing.matching_passages.push({
         chunk_text: chunk.chunk_text,
         section_label: chunk.section_label,
+        chunk_position: chunk.chunk_position,
         score: chunk.score,
       });
     } else {
@@ -608,6 +610,7 @@ function groupByVerdict(chunks: ChunkResult[], maxVerdicts: number = 15): Verdic
           {
             chunk_text: chunk.chunk_text,
             section_label: chunk.section_label,
+            chunk_position: chunk.chunk_position,
             score: chunk.score,
           },
         ],
