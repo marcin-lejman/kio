@@ -68,10 +68,10 @@ export async function POST(request: NextRequest) {
           });
 
           // Layer 3: stream AI answer
-          if (base.fusedChunks.length > 0) {
+          if (base.envelopes.length > 0) {
             try {
               const { stream: llmStream, startTime: answerStart } =
-                await streamAnswer(base.query, base.semanticQuery, base.fusedChunks, selectedModel);
+                await streamAnswer(base.query, base.semanticQuery, base.envelopes, selectedModel);
 
               const reader = llmStream.getReader();
               const decoder = new TextDecoder();

@@ -88,6 +88,34 @@ export interface CostEntry {
 }
 
 // ============================================================
+// Verdict Envelope — enriched per-verdict context for AI overview
+// ============================================================
+
+const ENVELOPE_MAX_VERDICTS = 10;
+const ENVELOPE_TOKEN_BUDGET = 40_000;
+const ENVELOPE_MAX_MATCHED_PER_VERDICT = 3;
+
+interface VerdictEnvelopeChunk {
+  chunk_text: string;
+  section_label: string;
+  chunk_position: number;
+  total_chunks: number;
+  score: number;
+}
+
+export interface VerdictEnvelope {
+  verdict_id: number;
+  sygnatura: string;
+  verdict_date: string;
+  document_type_normalized: string;
+  decision_type_normalized: string;
+  sentencja: string | null;
+  matched_chunks: VerdictEnvelopeChunk[];
+  supplementary_fakty: string | null;
+  supplementary_rozważania: string | null;
+}
+
+// ============================================================
 // Layer 1: Query Understanding
 // ============================================================
 
@@ -721,83 +749,240 @@ function groupByVerdict(chunks: ChunkResult[], maxVerdicts: number = 15): Verdic
 }
 
 // ============================================================
+// Verdict Envelope Enrichment
+// ============================================================
+
+/** Approximate token count for Polish text (matches ingest.py heuristic). */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.split(/\s+/).length * 1.5);
+}
+
+const SUPPLEMENTARY_LABELS = ["sentencja", "uzasadnienie_fakty", "uzasadnienie_rozważania"] as const;
+
+/**
+ * Build enriched per-verdict context for the AI overview.
+ * For each top verdict, fetches sentencja + fakty + rozważania sections
+ * that were not already in the search results, giving the LLM a
+ * coherent per-case view instead of disconnected chunk fragments.
+ */
+async function fetchVerdictEnvelopes(
+  rerankedChunks: ChunkResult[],
+  maxVerdicts: number = ENVELOPE_MAX_VERDICTS,
+  tokenBudget: number = ENVELOPE_TOKEN_BUDGET,
+): Promise<VerdictEnvelope[]> {
+  // 1. Group chunks by verdict (reuse existing logic), take top N
+  const grouped = groupByVerdict(rerankedChunks, maxVerdicts);
+
+  if (grouped.length === 0) return [];
+
+  const verdictIds = grouped.map((v) => v.verdict_id);
+
+  // 2. Build a map of matched chunks per verdict from reranked results
+  const matchedByVerdict = new Map<number, ChunkResult[]>();
+  for (const chunk of rerankedChunks) {
+    if (!verdictIds.includes(chunk.verdict_id)) continue;
+    const existing = matchedByVerdict.get(chunk.verdict_id) || [];
+    existing.push(chunk);
+    matchedByVerdict.set(chunk.verdict_id, existing);
+  }
+
+  // 3. Single DB query for supplementary sections
+  const supabase = createAdminClient();
+  const { data: extraChunks, error } = await supabase
+    .from("chunks")
+    .select("verdict_id, section_label, chunk_position, chunk_text, total_chunks")
+    .in("verdict_id", verdictIds)
+    .in("section_label", SUPPLEMENTARY_LABELS as unknown as string[])
+    .order("verdict_id")
+    .order("chunk_position");
+
+  if (error) {
+    console.error("Failed to fetch supplementary chunks:", error);
+  }
+
+  // Index supplementary chunks by verdict_id
+  const extraByVerdict = new Map<number, typeof extraChunks>();
+  for (const row of extraChunks || []) {
+    const arr = extraByVerdict.get(row.verdict_id) || [];
+    arr.push(row);
+    extraByVerdict.set(row.verdict_id, arr);
+  }
+
+  // 4. Build envelopes with token budget enforcement
+  const envelopes: VerdictEnvelope[] = [];
+  let totalTokens = 0;
+
+  for (const verdict of grouped) {
+    const matched = (matchedByVerdict.get(verdict.verdict_id) || [])
+      .sort((a, b) => b.score - a.score)
+      .slice(0, ENVELOPE_MAX_MATCHED_PER_VERDICT);
+
+    const matchedLabels = new Set(matched.map((c) => c.section_label));
+    const extra = extraByVerdict.get(verdict.verdict_id) || [];
+
+    // Find sentencja (first chunk only)
+    const sentencjaChunk = extra.find((c) => c.section_label === "sentencja");
+    const sentencja = sentencjaChunk && !matchedLabels.has("sentencja")
+      ? sentencjaChunk.chunk_text
+      : null;
+
+    // Find first uzasadnienie_fakty (only if not already matched)
+    const faktyChunk = extra.find((c) => c.section_label === "uzasadnienie_fakty");
+    const supplementaryFakty = faktyChunk && !matchedLabels.has("uzasadnienie_fakty")
+      ? faktyChunk.chunk_text
+      : null;
+
+    // Find first uzasadnienie_rozważania (only if not already matched)
+    const rozważaniaChunk = extra.find((c) => c.section_label === "uzasadnienie_rozważania");
+    const supplementaryRozważania = rozważaniaChunk && !matchedLabels.has("uzasadnienie_rozważania")
+      ? rozważaniaChunk.chunk_text
+      : null;
+
+    // Estimate tokens for this envelope
+    let envelopeTokens = 0;
+    for (const c of matched) envelopeTokens += estimateTokens(c.chunk_text);
+    if (sentencja) envelopeTokens += estimateTokens(sentencja);
+    if (supplementaryFakty) envelopeTokens += estimateTokens(supplementaryFakty);
+    if (supplementaryRozważania) envelopeTokens += estimateTokens(supplementaryRozważania);
+
+    // Token budget check — stop adding verdicts if exceeded
+    if (totalTokens + envelopeTokens > tokenBudget && envelopes.length > 0) break;
+    totalTokens += envelopeTokens;
+
+    envelopes.push({
+      verdict_id: verdict.verdict_id,
+      sygnatura: verdict.sygnatura,
+      verdict_date: verdict.verdict_date,
+      document_type_normalized: verdict.document_type_normalized,
+      decision_type_normalized: verdict.decision_type_normalized,
+      sentencja,
+      matched_chunks: matched.map((c) => ({
+        chunk_text: c.chunk_text,
+        section_label: c.section_label,
+        chunk_position: c.chunk_position,
+        total_chunks: c.total_chunks,
+        score: c.score,
+      })),
+      supplementary_fakty: supplementaryFakty,
+      supplementary_rozważania: supplementaryRozważania,
+    });
+  }
+
+  return envelopes;
+}
+
+// ============================================================
 // Layer 3: Answer Generation
 // ============================================================
 
 const ANSWER_GENERATION_PROMPT = `ROLA: Jesteś ekspertem prawa zamówień publicznych analizującym orzecznictwo KIO.
 
-ZADANIE: Na podstawie WYŁĄCZNIE dostarczonych fragmentów orzeczeń KIO, przygotuj WYCZERPUJĄCĄ analizę prawną odpowiadającą na pytanie użytkownika.
+ZADANIE: Na podstawie WYŁĄCZNIE dostarczonych orzeczeń KIO, przygotuj WYCZERPUJĄCĄ analizę prawną odpowiadającą na pytanie użytkownika.
 
 BEZWZGLĘDNY ZAKAZ: NIE stosuj żadnych elementów odgrywania roli, fikcyjnych ram narracyjnych ani konwencji korespondencji. Zakazane są: nagłówki typu "Notatka służbowa", "Memo", "Szanowny Partnerze", zwroty grzecznościowe, podpisy, daty, adresy, nagłówki "Do/Od". Zacznij BEZPOŚREDNIO od merytorycznej analizy — pierwsze zdanie musi dotyczyć treści prawnej.
 
+FORMAT MATERIAŁU ŹRÓDŁOWEGO:
+Materiał jest pogrupowany PO ORZECZENIACH. Każde orzeczenie może zawierać:
+- [SENTENCJA] — rozstrzygnięcie Izby (uwzględnienie/oddalenie/umorzenie). Wykorzystaj do ustalenia wyniku sprawy.
+- [TRAFIONY FRAGMENT] — fragment, który algorytm wyszukiwania uznał za najbardziej powiązany z pytaniem. To punkt wyjścia do analizy.
+- [STAN FAKTYCZNY] — tło faktyczne sprawy. Wykorzystaj do zrozumienia kontekstu, przedmiotu zamówienia i okoliczności.
+- [ROZWAŻANIA] — uzasadnienie prawne Izby. Wykorzystaj do zrozumienia argumentacji i tez prawnych.
+
+OCENA TRAFNOŚCI ORZECZEŃ:
+1. Dla każdego orzeczenia oceń jego trafność w odniesieniu do pytania użytkownika. Jeśli orzeczenie dotyczy zupełnie innego zagadnienia prawnego niż pytanie (np. pytanie o wadium, a orzeczenie o warunkach udziału), POMIŃ je całkowicie — nie wspominaj o nim w odpowiedzi.
+2. Przeanalizuj całościowo każde trafne orzeczenie, wykorzystując sentencję, trafione fragmenty, stan faktyczny i rozważania do pełnego zrozumienia stanowiska Izby.
+
 ZASADY PRACY Z MATERIAŁEM ŹRÓDŁOWYM:
-1. Opieraj się WYŁĄCZNIE na dostarczonych fragmentach. Nie uzupełniaj treści wiedzą ogólną, doktryną ani własnymi wnioskami wykraczającymi poza tekst fragmentów.
-2. Jeśli fragment jest niejasny lub niepełny — zaznacz to wprost zamiast domyślać się intencji Izby.
-3. Jeśli fragmenty nie pozwalają na pełną odpowiedź, napisz co z nich wynika i wyraźnie wskaż luki (np. "Dostępne fragmenty nie odnoszą się do kwestii X").
-4. NIE łącz tez z różnych orzeczeń w sposób sugerujący, że Izba wypowiedziała się w danej sprawie kompleksowo, jeśli każde orzeczenie dotyczyło innego stanu faktycznego.
-5. WYKORZYSTAJ MAKSYMALNIE wszystkie dostarczone fragmenty, które są merytorycznie powiązane z zapytaniem semantycznym. Nie ograniczaj się do 2-3 fragmentów — jeśli 10 z 15 fragmentów zawiera istotne treści, omów je wszystkie. Celem jest KOMPLEKSOWE pokrycie dostępnego materiału, nie streszczenie kilku wybranych orzeczeń. Pomiń jedynie fragmenty ewidentnie nietrafione (np. dotyczące zupełnie innego zagadnienia).
+3. Opieraj się WYŁĄCZNIE na dostarczonych fragmentach. Nie uzupełniaj treści wiedzą ogólną, doktryną ani własnymi wnioskami wykraczającymi poza tekst fragmentów.
+4. Jeśli fragment jest niejasny lub niepełny — zaznacz to wprost zamiast domyślać się intencji Izby.
+5. Jeśli fragmenty nie pozwalają na pełną odpowiedź, napisz co z nich wynika i wyraźnie wskaż luki (np. "Dostępne fragmenty nie odnoszą się do kwestii X").
+6. NIE łącz tez z różnych orzeczeń w sposób sugerujący, że Izba wypowiedziała się w danej sprawie kompleksowo, jeśli każde orzeczenie dotyczyło innego stanu faktycznego.
+7. WYKORZYSTAJ MAKSYMALNIE wszystkie orzeczenia, które są merytorycznie powiązane z zapytaniem. Pomiń jedynie orzeczenia ewidentnie nietrafione (dotyczące zupełnie innego zagadnienia prawnego).
 
 CYTOWANIE I SYGNATURY:
-6. Każde twierdzenie o stanowisku Izby MUSI zawierać odniesienie do konkretnego orzeczenia w formacie [KIO XXXX/XX].
-7. BEZWZGLĘDNY ZAKAZ cytowania sygnatur spoza sekcji „BIAŁĄ LISTA SYGNATUR" w wiadomości użytkownika. To jest zamknięta, wyczerpująca lista — żadne inne sygnatury NIE ISTNIEJĄ. Nie wymyślaj, nie rekonstruuj z pamięci, nie zgaduj numerów. Jeśli nie ma sygnatury na białej liście, NIE MOŻESZ się do niej odwołać. Naruszenie tej zasady jest KRYTYCZNYM BŁĘDEM.
-8. Przepisuj sygnatury z białej listy DOKŁADNIE — nie zmieniaj, nie łącz, nie skracaj numerów.
-9. Cytaty dosłowne z fragmentów oznaczaj cudzysłowami „...". Cytuj dosłownie TYLKO gdy precyzyjne sformułowanie Izby ma znaczenie dla argumentacji. W pozostałych przypadkach parafrazuj.
-10. Każdy cytat dosłowny musi być możliwy do zweryfikowania w dostarczonym fragmencie — nie rekonstruuj cytatów z pamięci.
+8. Każde twierdzenie o stanowisku Izby MUSI zawierać odniesienie do konkretnego orzeczenia w formacie [KIO XXXX/XX].
+9. BEZWZGLĘDNY ZAKAZ cytowania sygnatur spoza sekcji „BIAŁA LISTA SYGNATUR" w wiadomości użytkownika. To jest zamknięta, wyczerpująca lista — żadne inne sygnatury NIE ISTNIEJĄ. Nie wymyślaj, nie rekonstruuj z pamięci, nie zgaduj numerów. Jeśli nie ma sygnatury na białej liście, NIE MOŻESZ się do niej odwołać. Naruszenie tej zasady jest KRYTYCZNYM BŁĘDEM.
+10. Przepisuj sygnatury z białej listy DOKŁADNIE — nie zmieniaj, nie łącz, nie skracaj numerów.
+11. Cytaty dosłowne z fragmentów oznaczaj cudzysłowami „...". Cytuj dosłownie TYLKO gdy precyzyjne sformułowanie Izby ma znaczenie dla argumentacji. W pozostałych przypadkach parafrazuj.
+12. Każdy cytat dosłowny musi być możliwy do zweryfikowania w dostarczonym fragmencie — nie rekonstruuj cytatów z pamięci.
 
 STRUKTURA ODPOWIEDZI:
-11. Zacznij od 1-2 zdań podsumowujących główny wniosek wynikający z analizowanych orzeczeń.
-12. Następnie przedstaw stanowiska z poszczególnych orzeczeń, wskazując — tam gdzie to istotne — kontekst faktyczny sprawy (jaki był przedmiot zamówienia, czego dotyczył zarzut).
-13. Jeśli orzeczenia prezentują rozbieżne stanowiska, wyraźnie to zaznacz.
-14. Zakończ krótką oceną przydatności dostępnego materiału dla pytania użytkownika (np. "Powyższe orzeczenia dotyczą bezpośrednio problematyki X" lub "Fragmenty dotyczą pokrewnych zagadnień, ale nie odpowiadają wprost na pytanie o Y").
+13. Zacznij od 1-2 zdań podsumowujących główny wniosek wynikający z analizowanych orzeczeń.
+14. Następnie przedstaw stanowiska z poszczególnych orzeczeń. Dla każdego trafnego orzeczenia wskaż: rozstrzygnięcie (z sentencji), kontekst faktyczny i kluczową tezę prawną. NIE przepisuj obszernych fragmentów — streszczaj i cytuj dosłownie tylko kluczowe sformułowania Izby.
+15. Jeśli orzeczenia prezentują rozbieżne stanowiska, wyraźnie to zaznacz.
+16. Zakończ krótką oceną przydatności dostępnego materiału dla pytania użytkownika (np. "Powyższe orzeczenia dotyczą bezpośrednio problematyki X" lub "Fragmenty dotyczą pokrewnych zagadnień, ale nie odpowiadają wprost na pytanie o Y").
+17. ZWIĘZŁOŚĆ: mimo bogatszego kontekstu per orzeczenie, odpowiedź powinna być skoncentrowana i czytelna. Jeśli kilka orzeczeń prezentuje tę samą tezę — grupuj je tematycznie zamiast opisywać każde z osobna.
 
 STYL:
-15. Pisz po polsku, językiem prawniczym ale komunikatywnym — jak w notatce wewnętrznej kancelarii, nie jak w podręczniku.
-16. Unikaj ogólników typu "Izba wielokrotnie podkreślała" jeśli masz tylko 1-2 orzeczenia na dany temat. Precyzyjnie oddawaj skalę materiału.`;
+18. Pisz po polsku, językiem prawniczym ale komunikatywnym — jak w notatce wewnętrznej kancelarii, nie jak w podręczniku.
+19. Unikaj ogólników typu "Izba wielokrotnie podkreślała" jeśli masz tylko 1-2 orzeczenia na dany temat. Precyzyjnie oddawaj skalę materiału.`;
 
 /**
- * Build the list of individual citable sygnaturas from chunks.
+ * Build the list of individual citable sygnaturas from envelopes.
  * Splits pipe-separated sygnaturas into individual parts.
  */
 function normalizeSygnatura(s: string): string {
   return s.replace(/\s+/g, " ").replace(/\s*\/\s*/g, "/").trim();
 }
 
-function buildCitableList(chunks: ChunkResult[]): string[] {
+function buildCitableList(envelopes: VerdictEnvelope[]): string[] {
   const set = new Set<string>();
-  for (const c of chunks.slice(0, 15)) {
-    if (c.sygnatura.includes("|")) {
-      for (const part of c.sygnatura.split("|")) {
+  for (const env of envelopes) {
+    if (env.sygnatura.includes("|")) {
+      for (const part of env.sygnatura.split("|")) {
         const normalized = normalizeSygnatura(part);
         if (normalized) set.add(normalized);
       }
     } else {
-      set.add(normalizeSygnatura(c.sygnatura));
+      set.add(normalizeSygnatura(env.sygnatura));
     }
   }
   return [...set];
 }
 
-function buildAnswerContext(chunks: ChunkResult[]): string {
-  return chunks
-    .slice(0, 15)
-    .map((c, i) => {
-      // For pipe-separated sygnaturas, show individual parts to the AI
-      const label = c.sygnatura.includes("|")
-        ? c.sygnatura.split("|").map(s => s.trim()).join(", ")
-        : c.sygnatura;
-      return `--- Fragment ${i + 1} [${label}] (${c.section_label}) ---\n${c.chunk_text}`;
+function buildAnswerContext(envelopes: VerdictEnvelope[]): string {
+  return envelopes
+    .map((env, i) => {
+      const sygLabel = env.sygnatura.includes("|")
+        ? env.sygnatura.split("|").map((s) => s.trim()).join(", ")
+        : env.sygnatura;
+
+      const parts: string[] = [];
+      parts.push(`=== Orzeczenie ${i + 1}: ${sygLabel} (${env.document_type_normalized}, ${env.verdict_date}, ${env.decision_type_normalized}) ===`);
+
+      // Sentencja (supplementary — not from search results)
+      if (env.sentencja) {
+        parts.push(`[SENTENCJA]\n${env.sentencja}`);
+      }
+
+      // Matched chunks from search results
+      for (const mc of env.matched_chunks) {
+        parts.push(`[TRAFIONY FRAGMENT — ${mc.section_label}, pozycja ${mc.chunk_position}/${mc.total_chunks}]\n${mc.chunk_text}`);
+      }
+
+      // Supplementary factual background
+      if (env.supplementary_fakty) {
+        parts.push(`[STAN FAKTYCZNY]\n${env.supplementary_fakty}`);
+      }
+
+      // Supplementary legal reasoning
+      if (env.supplementary_rozważania) {
+        parts.push(`[ROZWAŻANIA]\n${env.supplementary_rozważania}`);
+      }
+
+      return parts.join("\n\n");
     })
     .join("\n\n");
 }
 
-function buildAnswerMessages(userQuery: string, semanticQuery: string, chunks: ChunkResult[]) {
-  const context = buildAnswerContext(chunks);
-  const citableList = buildCitableList(chunks);
+function buildAnswerMessages(userQuery: string, semanticQuery: string, envelopes: VerdictEnvelope[]) {
+  const context = buildAnswerContext(envelopes);
+  const citableList = buildCitableList(envelopes);
   return [
     { role: "system" as const, content: ANSWER_GENERATION_PROMPT },
     {
       role: "user" as const,
-      content: `Pytanie użytkownika: ${userQuery}\n\nZapytanie semantyczne: ${semanticQuery}\n\nFragmenty orzeczeń KIO:\n\n${context}\n\n========================================\nBIAŁA LISTA SYGNATUR — JEDYNE sygnatury, które możesz cytować:\n${citableList.map(s => `• ${s}`).join("\n")}\n========================================\nUWAGA: Jakiekolwiek odwołanie do sygnatury SPOZA powyższej listy jest niedopuszczalne.`,
+      content: `Pytanie użytkownika: ${userQuery}\n\nZapytanie semantyczne: ${semanticQuery}\n\nOrzeczenia KIO:\n\n${context}\n\n========================================\nBIAŁA LISTA SYGNATUR — JEDYNE sygnatury, które możesz cytować:\n${citableList.map(s => `• ${s}`).join("\n")}\n========================================\nUWAGA: Jakiekolwiek odwołanie do sygnatury SPOZA powyższej listy jest niedopuszczalne.`,
     },
   ];
 }
@@ -812,6 +997,7 @@ export interface SearchBaseResult {
   verdicts: VerdictResult[];
   sygnatura_map: Record<string, number>;
   fusedChunks: ChunkResult[];
+  envelopes: VerdictEnvelope[];
   costs: CostEntry[];
   totalTokens: number;
   startTime: number;
@@ -907,6 +1093,11 @@ export async function searchBase(
     }
   }
 
+  // Build enriched verdict envelopes for AI overview
+  const envelopes = rerankedChunks.length > 0
+    ? await fetchVerdictEnvelopes(rerankedChunks)
+    : [];
+
   const summarizeChunks = (chunks: ChunkResult[]) =>
     chunks.map((c) => ({
       sygnatura: c.sygnatura,
@@ -921,6 +1112,7 @@ export async function searchBase(
     verdicts,
     sygnatura_map: sygnaturaMap,
     fusedChunks: rerankedChunks,
+    envelopes,
     costs,
     totalTokens,
     startTime,
@@ -943,7 +1135,7 @@ export async function searchBase(
       })),
       fts_query: buildTsQuery(understanding.keywords, understanding.keyword_groups),
       fts_timed_out: ftsResult.timedOut,
-      answer_prompt: rerankedChunks.length > 0 ? buildAnswerMessages(userQuery, understanding.semantic_query, rerankedChunks) : null,
+      answer_prompt: envelopes.length > 0 ? buildAnswerMessages(userQuery, understanding.semantic_query, envelopes) : null,
     },
   };
 }
@@ -955,10 +1147,10 @@ export async function searchBase(
 export async function streamAnswer(
   userQuery: string,
   semanticQuery: string,
-  chunks: ChunkResult[],
+  envelopes: VerdictEnvelope[],
   answerModel: string,
 ): Promise<{ stream: ReadableStream<Uint8Array>; startTime: number }> {
-  const messages = buildAnswerMessages(userQuery, semanticQuery, chunks);
+  const messages = buildAnswerMessages(userQuery, semanticQuery, envelopes);
   return chatCompletionStream(messages, answerModel, {
     temperature: 0.2,
     max_tokens: 8000,
