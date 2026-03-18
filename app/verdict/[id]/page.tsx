@@ -1,9 +1,21 @@
 "use client";
 
-import { useEffect, useState, useMemo, Suspense } from "react";
+import { useEffect, useState, useMemo, useCallback, Suspense } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import ReactMarkdown, { type Components } from "react-markdown";
 import { buildKeywordPattern, highlightKeywords } from "@/lib/highlight";
+import { SimilarVerdicts } from "@/components/verdict/SimilarVerdicts";
+
+const summaryComponents: Components = {
+  p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
+  li: ({ children }) => <li className="mb-1">{children}</li>,
+  strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+  ul: ({ children }) => <ul className="list-disc pl-5 mb-3 space-y-1">{children}</ul>,
+  ol: ({ children }) => <ol className="list-decimal pl-5 mb-3 space-y-1">{children}</ol>,
+  h2: ({ children }) => <h3 className="font-semibold text-base mb-2 mt-4 first:mt-0">{children}</h3>,
+  h3: ({ children }) => <h4 className="font-semibold text-sm mb-2 mt-3 first:mt-0">{children}</h4>,
+};
 
 interface VerdictDetail {
   id: number;
@@ -60,9 +72,12 @@ function VerdictContent() {
   const [chunks, setChunks] = useState<Chunk[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<"text" | "html" | "chunks">(
+  const [viewMode, setViewMode] = useState<"text" | "html" | "chunks" | "summary">(
     targetChunk ? "chunks" : "html"
   );
+  const [summary, setSummary] = useState<string | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState(false);
 
   useEffect(() => {
     async function fetchVerdict() {
@@ -72,6 +87,14 @@ function VerdictContent() {
         const data = await response.json();
         setVerdict(data.verdict);
         setChunks(data.chunks);
+
+        // Fetch existing summary in parallel
+        fetch(`/api/verdict/${id}/summary`)
+          .then((res) => res.json())
+          .then((data) => {
+            if (data.summary) setSummary(data.summary);
+          })
+          .catch(() => {});
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load");
       } finally {
@@ -79,6 +102,22 @@ function VerdictContent() {
       }
     }
     fetchVerdict();
+  }, [id]);
+
+  const generateSummary = useCallback(async () => {
+    setSummaryLoading(true);
+    setSummaryError(false);
+    try {
+      const res = await fetch(`/api/verdict/${id}/summary`, { method: "POST" });
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      setSummary(data.summary);
+      setViewMode("summary");
+    } catch {
+      setSummaryError(true);
+    } finally {
+      setSummaryLoading(false);
+    }
   }, [id]);
 
   // Scroll to target chunk after data loads
@@ -138,7 +177,7 @@ function VerdictContent() {
 
           {/* View mode tabs */}
           <div className="flex gap-1 border-b border-border mb-4">
-            {(["html", "text", "chunks"] as const).map((mode) => (
+            {(["html", "text", "chunks", ...(summary ? ["summary" as const] : [])] as const).map((mode) => (
               <button
                 key={mode}
                 onClick={() => setViewMode(mode)}
@@ -151,6 +190,7 @@ function VerdictContent() {
                 {mode === "html" && "HTML"}
                 {mode === "text" && "Wersja bez formatowania"}
                 {mode === "chunks" && `Fragmenty (${chunks.length})`}
+                {mode === "summary" && "Podsumowanie"}
               </button>
             ))}
           </div>
@@ -169,14 +209,52 @@ function VerdictContent() {
           )}
 
           {viewMode === "html" && verdict.original_html && (
-            <div
-              className="rounded-lg border border-border bg-card p-6 sm:p-8 text-[15px] verdict-html"
-              dangerouslySetInnerHTML={{ __html: verdict.original_html }}
-            />
+            <div className="relative">
+              {!summary && (
+                <div className="absolute top-4 right-4 z-10">
+                  <button
+                    onClick={generateSummary}
+                    disabled={summaryLoading}
+                    className="flex items-center gap-1.5 rounded-md border border-border bg-card/90 backdrop-blur-sm px-3 py-1.5 text-xs font-medium text-muted hover:text-accent hover:border-accent/40 transition-colors shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {summaryLoading ? (
+                      <>
+                        <span className="h-3 w-3 animate-spin rounded-full border border-accent border-t-transparent" />
+                        Generuję...
+                      </>
+                    ) : (
+                      <>
+                        <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 0 0-2.455 2.456Z" />
+                        </svg>
+                        Generuj podsumowanie
+                      </>
+                    )}
+                  </button>
+                  {summaryError && (
+                    <p className="mt-1 text-[10px] text-red-500 text-right">
+                      Nie udało się wygenerować
+                    </p>
+                  )}
+                </div>
+              )}
+              <div
+                className="rounded-lg border border-border bg-card p-6 sm:p-8 text-[15px] verdict-html"
+                dangerouslySetInnerHTML={{ __html: verdict.original_html }}
+              />
+            </div>
           )}
 
           {viewMode === "html" && !verdict.original_html && (
             <p className="text-muted text-sm">Wersja HTML niedostępna.</p>
+          )}
+
+          {viewMode === "summary" && summary && (
+            <div className="rounded-lg border border-border bg-card p-6 sm:p-8">
+              <div className="text-sm leading-relaxed">
+                <ReactMarkdown components={summaryComponents}>{summary}</ReactMarkdown>
+              </div>
+            </div>
           )}
 
           {viewMode === "chunks" && (
@@ -292,6 +370,8 @@ function VerdictContent() {
               </div>
             </div>
           )}
+
+          <SimilarVerdicts verdictId={verdict.id} />
         </aside>
       </div>
     </div>
