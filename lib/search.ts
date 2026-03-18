@@ -112,6 +112,7 @@ Formy w grupie są wyszukiwane operatorem OR w indeksie pełnotekstowym. Grupy �
 - Dla konceptu-przymiotnika (np. "niewłaściwy"): formy jednowyrazowe to odmiany tego przymiotnika (niewłaściwy, niewłaściwego, niewłaściwym) + synonimy jednowyrazowe (wadliwy, nieprawidłowy, błędny).
 - Dla konceptu-frazy (np. "rażąco niska cena"): formy to WYRÓŻNIAJĄCE słowa frazy odmienione jednowyrazowo (rażąco, rażąca) + pełne krótkie frazy (rażąco niska cena, rażąco niskiej ceny) + synonimy jednowyrazowe.
 - Priorytet form: (1) odmiany jednowyrazowe kluczowych słów, (2) synonimy jednowyrazowe, (3) frazy 2-3 wyrazowe jako bonus.
+- NIE dodawaj jako form jednowyrazowych OGÓLNYCH terminów prawnych, które występują w niemal każdym orzeczeniu KIO (np. "postępowanie", "zamawiający", "zamówienie", "oferta", "ustawa"). Takie terminy pasują do wszystkich dokumentów i powodują timeout wyszukiwania. Używaj ich WYŁĄCZNIE jako część fraz wielowyrazowych. Np. dla konceptu "tryb postępowania": generuj "tryb", "trybu", "trybem" ale NIE "postępowanie", "postępowania" osobno — zachowaj je w frazach "tryb postępowania".
 
 ZASADY SEMANTIC_QUERY:
 - Przeformułuj zapytanie jako 1-2 zdania opisujące istotę problemu prawnego.
@@ -282,15 +283,17 @@ const POLISH_STOP_WORDS = new Set([
 ]);
 
 const MAX_PHRASE_WORDS = 3;
+const MAX_SINGLE_WORD_FORMS = 10;
 
 /**
  * Ensure each keyword group has single-word forms for FTS recall.
  * If a group only contains multi-word phrases, extract significant words
  * and add them as single-word forms. Drops phrases longer than MAX_PHRASE_WORDS.
+ * Caps single-word forms to prevent overly broad queries that timeout.
  */
 function ensureSingleWordForms(groups: KeywordGroup[]): KeywordGroup[] {
   return groups.map((group) => {
-    const singleWordForms: string[] = [];
+    let singleWordForms: string[] = [];
     const keptMultiWordForms: string[] = [];
 
     for (const form of group.forms) {
@@ -313,6 +316,13 @@ function ensureSingleWordForms(groups: KeywordGroup[]): KeywordGroup[] {
           singleWordForms.push(word);
         }
       }
+    }
+
+    // Cap single-word forms to prevent overly broad queries.
+    // The LLM generates them in priority order (distinctive first, generic last),
+    // so truncating keeps the most discriminating terms.
+    if (singleWordForms.length > MAX_SINGLE_WORD_FORMS) {
+      singleWordForms = singleWordForms.slice(0, MAX_SINGLE_WORD_FORMS);
     }
 
     return {
@@ -413,12 +423,17 @@ function buildTsQueryRelaxed(keywords: string[], keywordGroups?: KeywordGroup[])
     .join(" | ");
 }
 
+interface FtsResult {
+  results: ChunkResult[];
+  timedOut: boolean;
+}
+
 async function ftsSearch(
   keywords: string[],
   filters: SearchFilters,
   limit: number = 50,
   keywordGroups?: KeywordGroup[],
-): Promise<ChunkResult[]> {
+): Promise<FtsResult> {
   const supabase = createAdminClient();
   const searchQuery = buildTsQuery(keywords, keywordGroups);
 
@@ -431,11 +446,11 @@ async function ftsSearch(
     filter_date_to: filters.date_to || null,
   });
 
-  // On timeout or error, degrade gracefully — vector search still provides results
+  // On timeout, degrade gracefully — vector search still provides results
   if (error) {
     if (error.message?.includes("statement timeout")) {
       console.warn(`FTS timeout for query: ${searchQuery.slice(0, 200)}...`);
-      return [];
+      return { results: [], timedOut: true };
     }
     throw new Error(`FTS search error: ${error.message}`);
   }
@@ -453,12 +468,12 @@ async function ftsSearch(
         filter_date_to: filters.date_to || null,
       });
       if (!relaxedError && relaxedData && relaxedData.length > (data?.length || 0)) {
-        return mapFtsRows(relaxedData);
+        return { results: mapFtsRows(relaxedData), timedOut: false };
       }
     }
   }
 
-  return mapFtsRows(data || []);
+  return { results: mapFtsRows(data || []), timedOut: false };
 }
 
 function mapFtsRows(data: Record<string, unknown>[]): ChunkResult[] {
@@ -807,6 +822,7 @@ export interface SearchBaseResult {
     fused_results: { sygnatura: string; section_label: string; score: number; source: string }[];
     reranked_results: { sygnatura: string; section_label: string; score: number; llm_score: number; original_rank: number }[];
     fts_query: string;
+    fts_timed_out: boolean;
     answer_prompt: { role: string; content: string }[] | null;
   };
 }
@@ -849,10 +865,11 @@ export async function searchBase(
   // Parallel: vector search + FTS search
   onStatus?.("searching");
   const dbSearchStart = Date.now();
-  const [vectorResults, ftsResults] = await Promise.all([
+  const [vectorResults, ftsResult] = await Promise.all([
     vectorSearch(embedding, mergedFilters, 150),
     ftsSearch(understanding.keywords, mergedFilters, 150, understanding.keyword_groups),
   ]);
+  const ftsResults = ftsResult.results;
   costs.push({
     layer: "db_search",
     model: "vector+fts",
@@ -925,6 +942,7 @@ export async function searchBase(
         original_rank: fusedChunks.findIndex(fc => fc.chunk_id === c.chunk_id),
       })),
       fts_query: buildTsQuery(understanding.keywords, understanding.keyword_groups),
+      fts_timed_out: ftsResult.timedOut,
       answer_prompt: rerankedChunks.length > 0 ? buildAnswerMessages(userQuery, understanding.semantic_query, rerankedChunks) : null,
     },
   };

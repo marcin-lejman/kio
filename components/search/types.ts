@@ -48,6 +48,7 @@ export interface DebugData {
     filters: Record<string, string>;
   } | null;
   fts_query?: string;
+  fts_timed_out?: boolean;
   fts_results?: { sygnatura: string; section_label: string; score: number; chunk_text_preview: string }[];
   vector_results?: { sygnatura: string; section_label: string; score: number; chunk_text_preview: string }[];
   fused_results?: { sygnatura: string; section_label: string; score: number; source: string }[];

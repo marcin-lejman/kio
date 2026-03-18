@@ -9,7 +9,7 @@ export function DebugPanel({ debug }: { debug: DebugData }) {
 
   const sections = [
     { id: "query", label: "Query Understanding" },
-    { id: "fts", label: `FTS (${debug.fts_results?.length ?? 0})` },
+    { id: "fts", label: `FTS (${debug.fts_timed_out ? "TIMEOUT" : debug.fts_results?.length ?? 0})` },
     { id: "vector", label: `Vector (${debug.vector_results?.length ?? 0})` },
     { id: "fused", label: `Fused (${debug.fused_results?.length ?? 0})` },
     { id: "reranked", label: `Reranked (${debug.reranked_results?.length ?? 0})` },
@@ -70,7 +70,10 @@ export function DebugPanel({ debug }: { debug: DebugData }) {
                   <p className="text-gray-600 mt-1">{r.chunk_text_preview}...</p>
                 </div>
               ))}
-              {debug.fts_results.length === 0 && (
+              {debug.fts_timed_out && (
+                <p className="text-xs text-red-700 font-semibold">FTS query timed out — query too broad, vector search used as fallback</p>
+              )}
+              {!debug.fts_timed_out && debug.fts_results.length === 0 && (
                 <p className="text-xs text-orange-700">No FTS results</p>
               )}
             </div>
