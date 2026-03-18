@@ -303,17 +303,16 @@ function ensureSingleWordForms(groups: KeywordGroup[]): KeywordGroup[] {
       // Phrases > MAX_PHRASE_WORDS silently dropped (too restrictive for FTS adjacency)
     }
 
-    // If no single-word forms, extract significant words from ALL original phrases
+    // If no single-word forms, extract significant words from the CONCEPT NAME only.
+    // Using concept name (not all phrases) keeps it conservative — extracting from
+    // all phrases adds ultra-common words like "postępowania" that match nearly every
+    // document and cause query timeouts during ts_rank computation.
     if (singleWordForms.length === 0) {
-      const extractedWords = new Set<string>();
-      for (const form of group.forms) {
-        for (const word of form.split(/\s+/)) {
-          if (word.length > 2 && !POLISH_STOP_WORDS.has(word.toLowerCase())) {
-            extractedWords.add(word);
-          }
+      for (const word of group.concept.split(/\s+/)) {
+        if (word.length > 2 && !POLISH_STOP_WORDS.has(word.toLowerCase())) {
+          singleWordForms.push(word);
         }
       }
-      singleWordForms.push(...extractedWords);
     }
 
     return {
@@ -432,7 +431,14 @@ async function ftsSearch(
     filter_date_to: filters.date_to || null,
   });
 
-  if (error) throw new Error(`FTS search error: ${error.message}`);
+  // On timeout or error, degrade gracefully — vector search still provides results
+  if (error) {
+    if (error.message?.includes("statement timeout")) {
+      console.warn(`FTS timeout for query: ${searchQuery.slice(0, 200)}...`);
+      return [];
+    }
+    throw new Error(`FTS search error: ${error.message}`);
+  }
 
   // Safety net: if AND-grouped query returned too few results, retry with relaxed OR
   if (keywordGroups && keywordGroups.length > 1 && (!data || data.length < 5)) {
