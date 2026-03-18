@@ -38,9 +38,13 @@ export async function POST(request: NextRequest) {
     const stream = new ReadableStream({
       async start(controller) {
         function send(event: string, data: unknown) {
-          controller.enqueue(
-            encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
-          );
+          try {
+            controller.enqueue(
+              encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+            );
+          } catch {
+            // Client disconnected — stream already closed, ignore
+          }
         }
 
         try {
@@ -188,7 +192,7 @@ export async function POST(request: NextRequest) {
           send("error", { message: "Search failed. Please try again." });
         }
 
-        controller.close();
+        try { controller.close(); } catch { /* already closed */ }
       },
     });
 
