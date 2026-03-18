@@ -23,6 +23,7 @@ export const MODELS = {
   ANSWER_GENERATION: "anthropic/claude-sonnet-4.6",
   ANSWER_GENERATION_FAST: "google/gemini-3.1-flash-lite-preview",
   ANSWER_GENERATION_PRO: "google/gemini-3.1-pro-preview",
+  ANSWER_GENERATION_GPT: "openai/gpt-5.4",
   // Embeddings
   EMBEDDING: "openai/text-embedding-3-large",
 } as const;
@@ -31,6 +32,7 @@ export const ANSWER_MODELS = [
   { id: MODELS.ANSWER_GENERATION, label: "Claude Sonnet 4.6" },
   { id: MODELS.ANSWER_GENERATION_FAST, label: "Gemini Flash Lite" },
   { id: MODELS.ANSWER_GENERATION_PRO, label: "Gemini Pro" },
+  { id: MODELS.ANSWER_GENERATION_GPT, label: "GPT-5.4" },
 ] as const;
 
 export async function chatCompletion(
@@ -146,6 +148,7 @@ const COST_TABLE: Record<string, { input: number; output: number }> = {
   "google/gemini-3.1-pro-preview": { input: 1.25, output: 10.0 },
   "anthropic/claude-sonnet-4-20250514": { input: 3.0, output: 15.0 },
   "anthropic/claude-sonnet-4.6": { input: 3.0, output: 15.0 },
+  "openai/gpt-5.4": { input: 2.5, output: 10.0 },
   "openai/text-embedding-3-large": { input: 0.13, output: 0 },
 };
 
