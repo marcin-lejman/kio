@@ -56,8 +56,8 @@ export interface DebugData {
 }
 
 export const ANSWER_MODELS = [
-  { id: "google/gemini-3.1-flash-lite-preview", label: "Gemini Flash Lite" },
-  { id: "anthropic/claude-sonnet-4.6", label: "Claude Sonnet 4.6" },
-  { id: "google/gemini-3.1-pro-preview", label: "Gemini Pro" },
-  { id: "openai/gpt-5.4", label: "GPT-5.4" },
+  { id: "google/gemini-3.1-flash-lite-preview", label: "Gemini Flash Lite", hint: "Najszybszy, ekonomiczny" },
+  { id: "anthropic/claude-sonnet-4.6", label: "Claude Sonnet 4.6", hint: "Szybki i precyzyjny" },
+  { id: "google/gemini-3.1-pro-preview", label: "Gemini Pro", hint: "Najbardziej precyzyjny" },
+  { id: "openai/gpt-5.4", label: "GPT-5.4", hint: "Precyzyjny" },
 ];

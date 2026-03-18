@@ -49,8 +49,8 @@ export default function SearchPage() {
   );
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-8">
-      <div className="mb-8">
+    <div className="mx-auto flex min-h-[calc(100vh-57px)] max-w-3xl flex-col items-center pt-[25vh] px-4">
+      <div className="w-full">
         <div className="mb-6 text-center">
           <h1 className="text-2xl font-semibold text-primary mb-2">
             Wyszukiwarka orzeczeń KIO
