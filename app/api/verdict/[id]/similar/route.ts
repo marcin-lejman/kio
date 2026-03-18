@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerClient } from "@/lib/supabase";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { rateLimit } from "@/lib/rate-limit";
 
 // Section weights for scoring target chunks
@@ -56,7 +56,7 @@ export async function GET(
   }
 
   try {
-    const supabase = createServerClient();
+    const supabase = createAdminClient();
 
     // Step 1: Fetch source verdict's reasoning chunk embeddings
     let { data: sourceChunks } = await supabase

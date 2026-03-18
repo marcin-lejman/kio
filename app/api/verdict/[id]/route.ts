@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerClient } from "@/lib/supabase";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { cleanVerdictHtml } from "@/lib/sanitize-html";
 import { rateLimit } from "@/lib/rate-limit";
 
@@ -18,7 +18,7 @@ export async function GET(
   }
 
   try {
-    const supabase = createServerClient();
+    const supabase = createAdminClient();
 
     // Get verdict details
     const { data: verdict, error: verdictError } = await supabase

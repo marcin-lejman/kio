@@ -1,4 +1,4 @@
-import { createServerClient } from "./supabase";
+import { createAdminClient } from "./supabase/admin";
 import { chatCompletion, chatCompletionStream, embedText, MODELS, type LLMResponse } from "./openrouter";
 
 // ============================================================
@@ -214,7 +214,7 @@ async function vectorSearch(
   filters: SearchFilters,
   limit: number = 50
 ): Promise<ChunkResult[]> {
-  const supabase = createServerClient();
+  const supabase = createAdminClient();
 
   const { data, error } = await supabase.rpc("match_chunks", {
     query_embedding: embedding,
@@ -349,7 +349,7 @@ async function ftsSearch(
   limit: number = 50,
   keywordGroups?: KeywordGroup[],
 ): Promise<ChunkResult[]> {
-  const supabase = createServerClient();
+  const supabase = createAdminClient();
   const searchQuery = buildTsQuery(keywords, keywordGroups);
 
   const { data, error } = await supabase.rpc("search_chunks_fts", {

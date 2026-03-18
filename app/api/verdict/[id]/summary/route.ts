@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerClient } from "@/lib/supabase";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { chatCompletion, MODELS } from "@/lib/openrouter";
 import { rateLimit } from "@/lib/rate-limit";
 
@@ -55,7 +55,7 @@ export async function GET(
   }
 
   try {
-    const supabase = createServerClient();
+    const supabase = createAdminClient();
     const { data } = await supabase
       .from("verdict_summaries")
       .select("summary")
@@ -90,7 +90,7 @@ export async function POST(
   }
 
   try {
-    const supabase = createServerClient();
+    const supabase = createAdminClient();
 
     // Check if summary already exists (idempotent)
     const { data: existing } = await supabase

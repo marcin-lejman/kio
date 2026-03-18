@@ -1,32 +1,63 @@
-import { createServerClient } from "./supabase";
+import { createServerClient } from "@supabase/ssr";
 import { NextRequest, NextResponse } from "next/server";
 
 /**
- * Validate that the request has a valid Supabase session.
- * Reads the Authorization header (Bearer token) or sb-* cookies.
- *
- * For API routes: returns the user or null.
- * For middleware: redirects to /login if no session.
+ * Get the authenticated user from request cookies.
+ * For use in API Route Handlers.
  */
-export async function getUser(request: NextRequest) {
-  const authHeader = request.headers.get("authorization");
-  const token = authHeader?.replace("Bearer ", "");
+export async function getSessionUser(request: NextRequest) {
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll();
+        },
+        setAll() {
+          // Route Handlers don't need to set cookies here —
+          // the middleware handles token refresh.
+        },
+      },
+    }
+  );
 
-  if (!token) return null;
-
-  const supabase = createServerClient();
-  const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data.user) return null;
-  return data.user;
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  return user;
 }
 
 /**
- * Simple auth check for server-side operations.
- * Returns 401 response if not authenticated.
+ * Verify the caller is an authenticated admin.
+ * Returns the user if admin, or a 403 response.
  */
+export async function requireAdmin(
+  request: NextRequest
+): Promise<
+  | { user: NonNullable<Awaited<ReturnType<typeof getSessionUser>>>; error?: never }
+  | { user?: never; error: NextResponse }
+> {
+  const user = await getSessionUser(request);
+  if (!user) {
+    return { error: unauthorized() };
+  }
+  if (user.app_metadata?.role !== "admin") {
+    return { error: forbidden() };
+  }
+  return { user };
+}
+
 export function unauthorized() {
   return NextResponse.json(
     { error: "Authentication required" },
     { status: 401 }
+  );
+}
+
+export function forbidden() {
+  return NextResponse.json(
+    { error: "Insufficient permissions" },
+    { status: 403 }
   );
 }

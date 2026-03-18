@@ -1,38 +1,52 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { updateSession } from "@/lib/supabase/middleware";
 
-/**
- * Middleware for route protection.
- *
- * Currently configured as a pass-through — all routes are accessible.
- * To enable auth protection:
- * 1. Set up Supabase Auth (invite-only)
- * 2. Uncomment the auth check below
- * 3. Create /login page
- *
- * The search API routes don't require auth by default to allow
- * easy testing via curl during development. Enable auth for production.
- */
-export function middleware(request: NextRequest) {
-  // === Auth protection (uncomment for production) ===
-  //
-  // const { pathname } = request.nextUrl;
-  //
-  // // Public routes
-  // if (pathname === "/login" || pathname.startsWith("/api/auth")) {
-  //   return NextResponse.next();
-  // }
-  //
-  // // Check for Supabase session cookie
-  // const hasSession = request.cookies.getAll().some(
-  //   (c) => c.name.startsWith("sb-") && c.name.endsWith("-auth-token")
-  // );
-  //
-  // if (!hasSession) {
-  //   return NextResponse.redirect(new URL("/login", request.url));
-  // }
+const PUBLIC_ROUTES = ["/login", "/auth/confirm", "/auth/callback"];
 
-  return NextResponse.next();
+export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+
+  // Refresh the session token and get the user
+  const { supabaseResponse, user } = await updateSession(request);
+
+  // Public routes — allow through
+  if (PUBLIC_ROUTES.some((r) => pathname.startsWith(r))) {
+    // Redirect already-authenticated users away from /login
+    if (pathname === "/login" && user) {
+      return NextResponse.redirect(new URL("/", request.url));
+    }
+    return supabaseResponse;
+  }
+
+  // No session — redirect to login
+  if (!user) {
+    const loginUrl = new URL("/login", request.url);
+    return NextResponse.redirect(loginUrl);
+  }
+
+  // Suspended user — clear session and redirect
+  if (user.banned_until && new Date(user.banned_until) > new Date()) {
+    // Clear all sb-* cookies
+    const response = NextResponse.redirect(
+      new URL("/login?suspended=true", request.url)
+    );
+    request.cookies.getAll().forEach((cookie) => {
+      if (cookie.name.startsWith("sb-")) {
+        response.cookies.delete(cookie.name);
+      }
+    });
+    return response;
+  }
+
+  // Admin-only routes — verify admin role
+  if (pathname.startsWith("/admin")) {
+    if (user.app_metadata?.role !== "admin") {
+      return NextResponse.redirect(new URL("/", request.url));
+    }
+  }
+
+  return supabaseResponse;
 }
 
 export const config = {

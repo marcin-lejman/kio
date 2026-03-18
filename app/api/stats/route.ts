@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { createServerClient } from "@/lib/supabase";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export async function GET() {
   try {
-    const supabase = createServerClient();
+    const supabase = createAdminClient();
     const { count, error } = await supabase
       .from("verdicts")
       .select("*", { count: "exact", head: true });

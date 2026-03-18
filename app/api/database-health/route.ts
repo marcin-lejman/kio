@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { createServerClient } from "@/lib/supabase";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export async function GET() {
   try {
-    const supabase = createServerClient();
+    const supabase = createAdminClient();
     const { data, error } = await supabase.rpc("get_database_health");
 
     if (error) throw error;

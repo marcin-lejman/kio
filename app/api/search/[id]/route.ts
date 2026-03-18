@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { createServerClient } from "@/lib/supabase";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export async function GET(
   _request: NextRequest,
@@ -15,7 +15,7 @@ export async function GET(
     });
   }
 
-  const supabase = createServerClient();
+  const supabase = createAdminClient();
   const { data, error } = await supabase
     .from("search_history")
     .select("id, query, filters, ai_answer, ai_status, answer_model, result_data, created_at")

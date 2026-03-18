@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { searchBase, streamAnswer, type CostEntry } from "@/lib/search";
-import { createServerClient } from "@/lib/supabase";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { MODELS, estimateCost } from "@/lib/openrouter";
 import { rateLimit } from "@/lib/rate-limit";
 import type { SearchFilters } from "@/lib/search";
@@ -333,7 +333,7 @@ async function saveSearchHistory(result: {
   metadata: { time_ms: number; tokens_used: number; cost_usd: number; costs: unknown[] };
 }): Promise<number | null> {
   try {
-    const supabase = createServerClient();
+    const supabase = createAdminClient();
     const { data, error } = await supabase
       .from("search_history")
       .insert({
@@ -370,7 +370,7 @@ async function saveSearchHistory(result: {
 
 async function saveCostLog(costs: CostEntry[], searchId: number | null) {
   if (costs.length === 0) return;
-  const supabase = createServerClient();
+  const supabase = createAdminClient();
   await supabase.from("api_cost_log").insert(
     costs.map((c) => ({
       search_id: searchId,
