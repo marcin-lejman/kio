@@ -94,7 +94,7 @@ export interface CostEntry {
 const QUERY_UNDERSTANDING_PROMPT = `Jesteś asystentem wyszukiwarki orzeczeń Krajowej Izby Odwoławczej (KIO) w zamówieniach publicznych.
 
 Twoim zadaniem jest analiza zapytania użytkownika i wygenerowanie:
-1. keyword_groups — lista GRUP pojęciowych. Każda grupa to jeden koncept z zapytania, z wariantami gramatycznymi (mianownik, dopełniacz, celownik, biernik, narzędnik, miejscownik) oraz synonimy. Generuj 5-15 form na grupę. Każda grupa: {"concept": "nazwa_konceptu", "forms": ["forma1", "forma2", ...]}.
+1. keyword_groups — lista GRUP pojęciowych. Każda grupa to jeden koncept z zapytania, z wariantami gramatycznymi i synonimy. Generuj 5-15 form na grupę. Każda grupa: {"concept": "nazwa_konceptu", "forms": ["forma1", "forma2", ...]}.
 2. semantic_query — przeformułowane zapytanie semantyczne zoptymalizowane pod wyszukiwanie wektorowe w kontekście orzecznictwa KIO.
 3. filters — opcjonalne filtry (document_type: "wyrok"|"postanowienie", decision_type: "oddalone"|"uwzglednione"|"umorzone"|"odrzucone", date_from, date_to w formacie YYYY-MM-DD).
 
@@ -102,7 +102,16 @@ ZASADY GRUPOWANIA:
 - Każdy odrębny koncept/temat z zapytania = osobna grupa.
 - Wyrażenia stanowiące JEDNĄ frazę prawniczą (np. "rażąco niska cena") to JEDNA grupa, nie trzy.
 - Synonimy i terminy pokrewne wchodzą do grupy tego konceptu, który zastępują.
-- Frazy wielowyrazowe (np. "roboty budowlane") umieszczaj jako pełne frazy w forms.
+
+ZASADY GENEROWANIA FORM (KRYTYCZNE — od tego zależy jakość wyszukiwania):
+Formy w grupie są wyszukiwane operatorem OR w indeksie pełnotekstowym. Grupy łączone są operatorem AND. Frazy wielowyrazowe wymagają dopasowania sąsiadujących słów, więc są BARDZO restrykcyjne. Dlatego:
+- Każda grupa MUSI zawierać formy JEDNOWYRAZOWE — odmiany kluczowego słowa przez przypadki + synonimy jednowyrazowe. To są NAJWAŻNIEJSZE formy zapewniające trafienia.
+- Frazy wielowyrazowe (maks. 3 wyrazy) to UZUPEŁNIENIE, NIE zamiennik form jednowyrazowych.
+- NIGDY nie generuj grupy, w której WSZYSTKIE formy są wielowyrazowe — to powoduje brak wyników.
+- NIGDY nie generuj fraz dłuższych niż 3 wyrazy (np. "naruszenie przepisów o wyborze trybu" — ZA DŁUGA, nie używaj).
+- Dla konceptu-przymiotnika (np. "niewłaściwy"): formy jednowyrazowe to odmiany tego przymiotnika (niewłaściwy, niewłaściwego, niewłaściwym) + synonimy jednowyrazowe (wadliwy, nieprawidłowy, błędny).
+- Dla konceptu-frazy (np. "rażąco niska cena"): formy to WYRÓŻNIAJĄCE słowa frazy odmienione jednowyrazowo (rażąco, rażąca) + pełne krótkie frazy (rażąco niska cena, rażąco niskiej ceny) + synonimy jednowyrazowe.
+- Priorytet form: (1) odmiany jednowyrazowe kluczowych słów, (2) synonimy jednowyrazowe, (3) frazy 2-3 wyrazowe jako bonus.
 
 ZASADY SEMANTIC_QUERY:
 - Przeformułuj zapytanie jako 1-2 zdania opisujące istotę problemu prawnego.
@@ -134,14 +143,20 @@ keyword_groups: [
 
 Zapytanie: "rażąco niska cena"
 keyword_groups: [
-  {"concept": "rażąco niska cena", "forms": ["rażąco niska cena", "rażąco niskiej ceny", "rażąco niską cenę", "rażąco niską ceną", "rażąco niska", "rażąco niskiej", "rażąco niską", "rażąco niskiego", "rażąco niskie wynagrodzenie", "rażąco niskiego wynagrodzenia", "wyjaśnienia ceny", "wyjaśnień ceny", "wyjaśnienia rażąco niskiej ceny", "kosztorys", "kosztorysu", "kalkulacja", "kalkulacji", "wycena", "wyceny"]}
+  {"concept": "rażąco niska cena", "forms": ["rażąco", "rażąca", "rażąco niska cena", "rażąco niskiej ceny", "rażąco niską cenę", "rażąco niska", "rażąco niskiej", "rażąco niskiego", "rażąco niskie", "kosztorys", "kosztorysu", "kalkulacja", "kalkulacji", "wycena", "wyceny"]}
+]
+
+Zapytanie: "niewłaściwy tryb postępowania"
+keyword_groups: [
+  {"concept": "tryb postępowania", "forms": ["tryb", "trybu", "trybem", "trybie", "tryby", "trybów", "tryb postępowania", "trybu postępowania", "trybie postępowania", "procedura", "procedury", "procedurze"]},
+  {"concept": "niewłaściwy", "forms": ["niewłaściwy", "niewłaściwego", "niewłaściwym", "niewłaściwą", "nieprawidłowy", "nieprawidłowego", "nieprawidłowym", "wadliwy", "wadliwego", "błędny", "błędnego", "naruszenie", "naruszenia"]}
 ]
 
 Zapytanie: "wykluczenie wykonawcy za fałszywe oświadczenie"
 keyword_groups: [
-  {"concept": "wykluczenie", "forms": ["wykluczenie", "wykluczenia", "wykluczeniem", "wykluczeniu", "wykluczonego", "wykluczyć", "przesłanki wykluczenia", "przesłanek wykluczenia", "podstawy wykluczenia"]},
+  {"concept": "wykluczenie", "forms": ["wykluczenie", "wykluczenia", "wykluczeniem", "wykluczeniu", "wykluczyć", "przesłanki wykluczenia", "przesłanek wykluczenia", "podstawy wykluczenia"]},
   {"concept": "wykonawca", "forms": ["wykonawca", "wykonawcy", "wykonawcę", "wykonawców", "wykonawcą", "podmiot", "konsorcjum"]},
-  {"concept": "fałszywe oświadczenie", "forms": ["fałszywe oświadczenie", "fałszywego oświadczenia", "fałszywym oświadczeniem", "nieprawdziwe informacje", "nieprawdziwych informacji", "wprowadzenie w błąd", "wprowadzenia w błąd", "JEDZ", "oświadczenie", "oświadczenia"]}
+  {"concept": "fałszywe oświadczenie", "forms": ["fałszywe", "fałszywego", "fałszywym", "nieprawdziwe", "nieprawdziwych", "fałszywe oświadczenie", "fałszywego oświadczenia", "nieprawdziwe informacje", "wprowadzenie w błąd", "JEDZ", "oświadczenie", "oświadczenia"]}
 ]
 
 Odpowiedz WYŁĄCZNIE prawidłowym JSON-em bez markdown, bez komentarzy:
@@ -168,6 +183,10 @@ export async function queryUnderstanding(userQuery: string, model?: string): Pro
       parsed.keyword_groups = parsed.keyword_groups.filter(
         (g) => g && typeof g.concept === "string" && Array.isArray(g.forms) && g.forms.length > 0
       );
+      // Safeguard: ensure each group has single-word forms for FTS recall
+      if (parsed.keyword_groups.length > 0) {
+        parsed.keyword_groups = ensureSingleWordForms(parsed.keyword_groups);
+      }
     } else {
       // No valid groups — clear the field so buildTsQuery falls back to flat OR
       parsed.keyword_groups = undefined;
@@ -252,6 +271,58 @@ async function vectorSearch(
  * Strip Polish diacritics from text. Used to generate diacritic-insensitive
  * FTS variants so "zamowien" matches "zamówień".
  */
+// Polish stop words — excluded when extracting single words from phrases
+const POLISH_STOP_WORDS = new Set([
+  'i', 'w', 'z', 'na', 'do', 'o', 'za', 'od', 'po', 'nie', 'się', 'jest',
+  'to', 'że', 'a', 'jak', 'ale', 'lub', 'ten', 'ta', 'te', 'tego', 'tej',
+  'tym', 'tych', 'tę', 'przez', 'co', 'dla', 'przy', 'jako', 'ze', 'już',
+  'być', 'też', 'które', 'który', 'która', 'których', 'którym', 'której',
+  'może', 'oraz', 'ich', 'jej', 'jego', 'będzie', 'został', 'została',
+  'zostało', 'nr',
+]);
+
+const MAX_PHRASE_WORDS = 3;
+
+/**
+ * Ensure each keyword group has single-word forms for FTS recall.
+ * If a group only contains multi-word phrases, extract significant words
+ * and add them as single-word forms. Drops phrases longer than MAX_PHRASE_WORDS.
+ */
+function ensureSingleWordForms(groups: KeywordGroup[]): KeywordGroup[] {
+  return groups.map((group) => {
+    const singleWordForms: string[] = [];
+    const keptMultiWordForms: string[] = [];
+
+    for (const form of group.forms) {
+      const words = form.trim().split(/\s+/);
+      if (words.length === 1) {
+        singleWordForms.push(form);
+      } else if (words.length <= MAX_PHRASE_WORDS) {
+        keptMultiWordForms.push(form);
+      }
+      // Phrases > MAX_PHRASE_WORDS silently dropped (too restrictive for FTS adjacency)
+    }
+
+    // If no single-word forms, extract significant words from ALL original phrases
+    if (singleWordForms.length === 0) {
+      const extractedWords = new Set<string>();
+      for (const form of group.forms) {
+        for (const word of form.split(/\s+/)) {
+          if (word.length > 2 && !POLISH_STOP_WORDS.has(word.toLowerCase())) {
+            extractedWords.add(word);
+          }
+        }
+      }
+      singleWordForms.push(...extractedWords);
+    }
+
+    return {
+      ...group,
+      forms: [...new Set([...singleWordForms, ...keptMultiWordForms])],
+    };
+  });
+}
+
 function stripPolishDiacritics(text: string): string {
   const map: Record<string, string> = {
     'ą': 'a', 'ć': 'c', 'ę': 'e', 'ł': 'l', 'ń': 'n',
