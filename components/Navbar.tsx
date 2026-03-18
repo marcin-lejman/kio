@@ -107,32 +107,35 @@ export default function Navbar() {
 
           {/* Right: user area (desktop) + hamburger (mobile) */}
           <div className="flex items-center gap-3">
-            {/* Desktop user area */}
-            <div className="hidden md:flex items-center gap-3">
-              {isAdmin && !onAdminPage && (
-                <Link
-                  href="/admin"
-                  className="rounded-md px-2.5 py-1.5 text-sm text-muted hover:text-foreground hover:bg-background transition-colors"
-                >
-                  Panel admin
-                </Link>
-              )}
-              <div className="flex items-center gap-2 pl-3 border-l border-border">
-                <span className="text-sm text-muted max-w-[200px] truncate">
-                  {user.email}
-                </span>
+            {/* Desktop user dropdown */}
+            <div className="hidden md:block relative group">
+              <button className="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-sm text-muted hover:text-foreground transition-colors">
                 {isAdmin && (
-                  <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-accent">
-                    admin
-                  </span>
+                  <span className="h-2 w-2 rounded-full bg-accent flex-shrink-0" />
                 )}
-              </div>
-              <button
-                onClick={handleLogout}
-                className="rounded-md px-2.5 py-1.5 text-sm text-muted hover:text-error hover:bg-error/5 transition-colors"
-              >
-                Wyloguj
+                <span className="max-w-[200px] truncate">{user.email}</span>
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" className="opacity-50">
+                  <path d="M3 5l3 3 3-3" />
+                </svg>
               </button>
+              <div className="absolute right-0 top-full pt-1 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-150 z-50">
+                <div className="min-w-[180px] rounded-md border border-border bg-card shadow-lg py-1">
+                  {isAdmin && (
+                    <Link
+                      href="/admin"
+                      className="block px-3 py-2 text-sm text-muted hover:text-foreground hover:bg-background transition-colors"
+                    >
+                      Ustawienia
+                    </Link>
+                  )}
+                  <button
+                    onClick={handleLogout}
+                    className="w-full text-left px-3 py-2 text-sm text-muted hover:text-error hover:bg-error/5 transition-colors"
+                  >
+                    Wyloguj
+                  </button>
+                </div>
+              </div>
             </div>
 
             {/* Mobile hamburger */}
@@ -181,27 +184,21 @@ export default function Navbar() {
               </Link>
             ))}
 
-            {isAdmin && !onAdminPage && (
-              <Link
-                href="/admin"
-                className="block rounded-md px-3 py-2 text-sm text-muted hover:text-foreground hover:bg-background transition-colors"
-              >
-                Panel admin
-              </Link>
-            )}
-
             {/* Mobile user section */}
             <div className="pt-3 mt-3 border-t border-border">
-              <div className="px-3 py-1 flex items-center gap-2">
-                <span className="text-sm text-muted truncate">
+              <div className="px-3 py-1">
+                <span className="text-sm text-muted truncate block">
                   {user.email}
                 </span>
-                {isAdmin && (
-                  <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-accent">
-                    admin
-                  </span>
-                )}
               </div>
+              {isAdmin && (
+                <Link
+                  href="/admin"
+                  className="block rounded-md px-3 py-2 text-sm text-muted hover:text-foreground hover:bg-background transition-colors"
+                >
+                  Ustawienia
+                </Link>
+              )}
               <button
                 onClick={handleLogout}
                 className="w-full text-left rounded-md px-3 py-2 text-sm text-muted hover:text-error hover:bg-error/5 transition-colors"
