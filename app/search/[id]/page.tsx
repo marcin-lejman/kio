@@ -9,6 +9,7 @@ import {
   DebugPanel,
   SearchMetadata,
 } from "@/components/search";
+import { AddToFolderDialog } from "@/components/folders/AddToFolderDialog";
 import type {
   SearchFilters,
   VerdictResult,
@@ -154,6 +155,7 @@ export default function SearchResultPage() {
   const [liveDebug, setLiveDebug] = useState<DebugData | null>(null);
 
   const [visibleCount, setVisibleCount] = useState(15);
+  const [showAddToFolder, setShowAddToFolder] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const pendingSearchIdRef = useRef<number | null>(null);
 
@@ -514,6 +516,7 @@ export default function SearchResultPage() {
             error={aiError}
             sygnaturaMap={sygnaturaMap}
             unresolvedRefs={isLive ? liveUnresolvedRefs : undefined}
+            onSaveToFolder={() => setShowAddToFolder(true)}
           />
 
           {debug && <DebugPanel debug={debug} />}
@@ -552,6 +555,16 @@ export default function SearchResultPage() {
           </p>
         </div>
       )}
+
+      <AddToFolderDialog
+        isOpen={showAddToFolder}
+        onClose={() => setShowAddToFolder(false)}
+        mode={{
+          type: "search",
+          searchId: isPending ? (pendingSearchIdRef.current || 0) : parseInt(searchId, 10),
+          query: saved?.query || pendingDataRef.current?.query || "",
+        }}
+      />
     </div>
   );
 }

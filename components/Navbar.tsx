@@ -15,6 +15,7 @@ interface NavLink {
 const APP_LINKS: NavLink[] = [
   { href: "/", label: "Szukaj", exact: true },
   { href: "/browse", label: "Orzeczenia" },
+  { href: "/folders", label: "Teczki" },
   { href: "/history", label: "Historia" },
 ];
 

@@ -6,6 +6,7 @@ import Link from "next/link";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { buildKeywordPattern, highlightKeywords } from "@/lib/highlight";
 import { SimilarVerdicts } from "@/components/verdict/SimilarVerdicts";
+import { AddToFolderDialog } from "@/components/folders/AddToFolderDialog";
 
 const summaryComponents: Components = {
   p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
@@ -78,6 +79,7 @@ function VerdictContent() {
   const [summary, setSummary] = useState<string | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState(false);
+  const [showAddToFolder, setShowAddToFolder] = useState(false);
 
   useEffect(() => {
     async function fetchVerdict() {
@@ -371,9 +373,26 @@ function VerdictContent() {
             </div>
           )}
 
+          {/* Add to folder */}
+          <button
+            onClick={() => setShowAddToFolder(true)}
+            className="w-full flex items-center justify-center gap-2 rounded-md border border-accent/30 bg-accent/5 px-4 py-2.5 text-sm font-medium text-accent hover:bg-accent/10 transition-colors cursor-pointer"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 10.5v6m3-3H9m4.06-7.19l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+            </svg>
+            Dodaj do teczki
+          </button>
+
           <SimilarVerdicts verdictId={verdict.id} />
         </aside>
       </div>
+
+      <AddToFolderDialog
+        isOpen={showAddToFolder}
+        onClose={() => setShowAddToFolder(false)}
+        mode={{ type: "verdicts", verdictIds: [verdict.id], addedFrom: "verdict_page" }}
+      />
     </div>
   );
 }

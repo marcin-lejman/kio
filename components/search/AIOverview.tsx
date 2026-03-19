@@ -129,12 +129,14 @@ export function AIOverview({
   error,
   sygnaturaMap,
   unresolvedRefs,
+  onSaveToFolder,
 }: {
   overview: string;
   streaming: boolean;
   error: boolean;
   sygnaturaMap: Record<string, number>;
   unresolvedRefs?: string[];
+  onSaveToFolder?: () => void;
 }) {
   const components = useMarkdownComponents(sygnaturaMap);
 
@@ -162,6 +164,17 @@ export function AIOverview({
           Podsumowanie AI na podstawie pierwszych 15 wyników
           {streaming && " ..."}
         </span>
+        {onSaveToFolder && !streaming && overview && (
+          <button
+            onClick={onSaveToFolder}
+            className="ml-auto flex items-center gap-1.5 rounded-md border border-accent/30 bg-accent/5 px-2.5 py-1 text-[11px] font-medium text-accent hover:bg-accent/10 transition-colors cursor-pointer"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 10.5v6m3-3H9m4.06-7.19l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+            </svg>
+            Zapisz do teczki
+          </button>
+        )}
       </div>
       <div className="ai-overview text-sm leading-relaxed">
         {overview ? (

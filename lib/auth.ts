@@ -48,6 +48,23 @@ export async function requireAdmin(
   return { user };
 }
 
+/**
+ * Verify the caller is an authenticated user.
+ * Returns the user if authenticated, or a 401 response.
+ */
+export async function requireUser(
+  request: NextRequest
+): Promise<
+  | { user: NonNullable<Awaited<ReturnType<typeof getSessionUser>>>; error?: never }
+  | { user?: never; error: NextResponse }
+> {
+  const user = await getSessionUser(request);
+  if (!user) {
+    return { error: unauthorized() };
+  }
+  return { user };
+}
+
 export function unauthorized() {
   return NextResponse.json(
     { error: "Authentication required" },
