@@ -24,38 +24,6 @@ interface UserTemplate {
   questions: string[];
 }
 
-const DEFAULT_TEMPLATES = [
-  {
-    name: "Porównaj linie orzecznicze",
-    questions: [
-      "Jak różnią się stanowiska KIO w analizowanych orzeczeniach?",
-      "Czy można zidentyfikować dominujący pogląd?",
-      "Jak stanowiska zmieniały się w czasie?",
-    ],
-  },
-  {
-    name: "Znajdź sprzeczności",
-    questions: [
-      "Czy w analizowanych orzeczeniach występują sprzeczne tezy prawne?",
-      "Jakie są kluczowe różnice w argumentacji Izby?",
-    ],
-  },
-  {
-    name: "Wspólne podstawy prawne",
-    questions: [
-      "Jakie przepisy są powoływane w analizowanych orzeczeniach?",
-      "Które podstawy prawne są wspólne dla wszystkich orzeczeń?",
-    ],
-  },
-  {
-    name: "Podsumuj dla klienta",
-    questions: [
-      "Jakie są główne wnioski z analizowanych orzeczeń?",
-      "Co te orzeczenia oznaczają w praktyce dla zamawiającego i wykonawcy?",
-    ],
-  },
-];
-
 type Step = "select" | "questions" | "streaming";
 
 export function CreateAnalysisFlow({
@@ -87,36 +55,11 @@ export function CreateAnalysisFlow({
   const [loadedTemplateId, setLoadedTemplateId] = useState<number | null>(null);
 
   useEffect(() => {
-    (async () => {
-      let userTemplates: UserTemplate[] = [];
-
-      try {
-        const res = await fetch("/api/analysis-templates");
-        if (res.ok) {
-          const data = await res.json();
-          userTemplates = data.templates || [];
-        }
-      } catch { /* API may not be available yet */ }
-
-      // Seed defaults if user has no templates
-      if (userTemplates.length === 0) {
-        for (const def of DEFAULT_TEMPLATES) {
-          try {
-            const seedRes = await fetch("/api/analysis-templates", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(def),
-            });
-            if (seedRes.ok) {
-              userTemplates.push(await seedRes.json());
-            }
-          } catch { /* skip failed seed */ }
-        }
-      }
-
-      setTemplates(userTemplates);
-      setTemplatesLoaded(true);
-    })();
+    fetch("/api/analysis-templates")
+      .then((res) => res.ok ? res.json() : { templates: [] })
+      .then((data) => setTemplates(data.templates || []))
+      .catch(() => {})
+      .finally(() => setTemplatesLoaded(true));
   }, []);
 
   // Step 3: streaming

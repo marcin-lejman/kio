@@ -139,6 +139,26 @@ export function AIOverview({
   onSaveToFolder?: () => void;
 }) {
   const components = useMarkdownComponents(sygnaturaMap);
+  const overviewRef = useRef<HTMLDivElement>(null);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    if (!overviewRef.current) return;
+    try {
+      const html = overviewRef.current.innerHTML;
+      const plain = overviewRef.current.innerText;
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "text/html": new Blob([html], { type: "text/html" }),
+          "text/plain": new Blob([plain], { type: "text/plain" }),
+        }),
+      ]);
+    } catch {
+      await navigator.clipboard.writeText(overviewRef.current.innerText);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   if (error) {
     return (
@@ -164,19 +184,29 @@ export function AIOverview({
           Podsumowanie AI na podstawie pierwszych 15 wyników
           {streaming && " ..."}
         </span>
-        {onSaveToFolder && !streaming && overview && (
-          <button
-            onClick={onSaveToFolder}
-            className="ml-auto flex items-center gap-1.5 rounded-md border border-accent/30 bg-accent/5 px-2.5 py-1 text-[11px] font-medium text-accent hover:bg-accent/10 transition-colors cursor-pointer"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 10.5v6m3-3H9m4.06-7.19l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
-            </svg>
-            Zapisz do teczki
-          </button>
+        {!streaming && overview && (
+          <div className="ml-auto flex items-center gap-1.5">
+            <button
+              onClick={handleCopy}
+              className="flex items-center gap-1.5 rounded-md border border-accent/30 bg-accent/5 px-2.5 py-1 text-[11px] font-medium text-accent hover:bg-accent/10 transition-colors cursor-pointer"
+            >
+              {copied ? "Skopiowano!" : "Kopiuj"}
+            </button>
+            {onSaveToFolder && (
+              <button
+                onClick={onSaveToFolder}
+                className="flex items-center gap-1.5 rounded-md border border-accent/30 bg-accent/5 px-2.5 py-1 text-[11px] font-medium text-accent hover:bg-accent/10 transition-colors cursor-pointer"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 10.5v6m3-3H9m4.06-7.19l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+                </svg>
+                Zapisz do teczki
+              </button>
+            )}
+          </div>
         )}
       </div>
-      <div className="ai-overview text-sm leading-relaxed">
+      <div className="ai-overview text-sm leading-relaxed" ref={overviewRef}>
         {overview ? (
           <ReactMarkdown components={components}>{overview}</ReactMarkdown>
         ) : streaming ? (
