@@ -1,36 +1,91 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Wyszukiwarka KIO
 
-## Getting Started
+Inteligentna wyszukiwarka orzeczeń Krajowej Izby Odwoławczej (KIO) z wykorzystaniem AI. Przeszukuje korpus ~29 800 orzeczeń łącząc wyszukiwanie semantyczne, pełnotekstowe oraz generowanie odpowiedzi przez modele językowe.
 
-First, run the development server:
+## Główne funkcje
+
+### Wyszukiwanie hybrydowe
+
+Zapytania przetwarzane są w wieloetapowym pipeline:
+
+1. **Analiza zapytania** — model AI wyodrębnia słowa kluczowe, przeformułowuje zapytanie i sugeruje filtry
+2. **Wyszukiwanie równoległe** — wektorowe (embedding similarity) + pełnotekstowe (PostgreSQL FTS)
+3. **Łączenie wyników** — reciprocal rank fusion, grupowanie fragmentów po orzeczeniach
+4. **Przegląd AI** — strumieniowa synteza odpowiedzi na podstawie 10 najlepszych trafień z linkami do orzeczeń
+
+Obsługuje też bezpośrednie wyszukiwanie po sygnaturze (np. "KIO 1234/24").
+
+### Filtry
+
+- Typ dokumentu (wyrok / postanowienie)
+- Typ rozstrzygnięcia (oddalone / uwzględnione / umorzone / odrzucone)
+- Zakres dat
+
+### Szczegóły orzeczenia
+
+Cztery widoki dla każdego orzeczenia:
+
+- **HTML** — oryginalny sformatowany dokument
+- **Tekst** — wersja tekstowa
+- **Fragmenty** — podział na sekcje z etykietami, liczbą tokenów i podświetlaniem słów kluczowych
+- **Podsumowanie** — generowane przez AI streszczenie prawne (przedmiot, rozstrzygnięcie, zarzuty, fakty, rozważania, podstawa prawna, znaczenie praktyczne)
+
+### Podobne orzeczenia
+
+Wyszukiwanie semantycznie zbliżonych orzeczeń z wagami zależnymi od sekcji dokumentu (uzasadnienie > stan faktyczny > treść).
+
+### Przeglądanie i historia
+
+- **Przeglądanie** — stronicowana tabela wszystkich orzeczeń z filtrami i sortowaniem
+- **Historia wyszukiwań** — lista zapytań z liczbą wyników, kosztami i statusem AI
+
+### Wybór modelu
+
+Użytkownik może wybrać model odpowiedzi:
+
+- Claude Sonnet 4.6 (domyślny)
+- Gemini Flash Lite (szybki)
+- Gemini Pro (zaawansowany)
+- GPT-5.4 (eksperymentalny)
+
+### Panel administracyjny
+
+- **Użytkownicy** — zarządzanie rolami, zawieszanie, ustawianie haseł, usuwanie
+- **Zaproszenia** — wysyłanie zaproszeń z przypisaniem roli
+- **Koszty API** — dzienne/tygodniowe/miesięczne zestawienie kosztów i tokenów wg modelu
+- **Zdrowie bazy** — statystyki korpusu, kontrola integralności (brakujące chunki, embeddingi, duplikaty)
+
+## Stack technologiczny
+
+- **Frontend**: Next.js 16, React 19, Tailwind CSS v4, TypeScript
+- **Backend**: Next.js App Router, Supabase (PostgreSQL + pgvector + RLS)
+- **LLM**: OpenRouter (Claude, Gemini, GPT) + text-embedding-3-large (3072 dim)
+- **Autentykacja**: Supabase Auth z RBAC (regular / admin)
+
+## Uruchomienie
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Wymagane zmienne środowiskowe:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+OPENROUTER_API_KEY=
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Architektura danych
 
-## Learn More
+Orzeczenia dzielone są na fragmenty (chunki) z uwzględnieniem struktury dokumentów prawnych:
 
-To learn more about Next.js, take a look at the following resources:
+- **Tier A** — pełna struktura (nagłówek, sentencja, zarzuty, uzasadnienie)
+- **Tier A_NOUZAS** — bez markera uzasadnienia
+- **Tier B** — tylko uzasadnienie
+- **Tier C** — podział generyczny
+- **SHORT** — dokumenty poniżej 500 słów
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Parametry chunkingu: target 800 tokenów, max 1200, min 100. Aproksymacja tokenów dla polskiego: `len(words) * 1.5`.
