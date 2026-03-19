@@ -8,11 +8,19 @@ interface HistoryEntry {
   query: string;
   result_count: number;
   ai_status: string;
+  answer_model: string | null;
   tokens_used: number;
   cost_usd: number;
   latency_ms: number;
   created_at: string;
 }
+
+const modelLabels: Record<string, string> = {
+  "anthropic/claude-sonnet-4.6": "Claude Sonnet",
+  "google/gemini-3.1-flash-lite-preview": "Gemini Flash",
+  "google/gemini-3.1-pro-preview": "Gemini Pro",
+  "openai/gpt-5.4": "GPT-5.4",
+};
 
 export default function HistoryPage() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -72,7 +80,7 @@ export default function HistoryPage() {
                   <th className="text-left py-2 px-3 font-medium text-muted">Data</th>
                   <th className="text-left py-2 px-3 font-medium text-muted">Zapytanie</th>
                   <th className="text-right py-2 px-3 font-medium text-muted">Wyniki</th>
-                  <th className="text-right py-2 px-3 font-medium text-muted">Status AI</th>
+                  <th className="text-right py-2 px-3 font-medium text-muted">Model</th>
                   <th className="text-right py-2 px-3 font-medium text-muted">Tokeny</th>
                   <th className="text-right py-2 px-3 font-medium text-muted">Koszt</th>
                   <th className="text-right py-2 px-3 font-medium text-muted">Czas</th>
@@ -105,17 +113,17 @@ export default function HistoryPage() {
                       {entry.result_count}
                     </td>
                     <td className="py-2 px-3 text-right">
-                      <span
-                        className={`inline-block rounded-full px-2 py-0.5 text-xs ${
-                          entry.ai_status === "verified"
-                            ? "bg-green-100 text-green-800"
-                            : entry.ai_status === "sources_only"
-                            ? "bg-yellow-100 text-yellow-800"
-                            : "bg-red-100 text-red-800"
-                        }`}
-                      >
-                        {entry.ai_status === "verified" ? "AI" : entry.ai_status === "sources_only" ? "Źródła" : "Błąd"}
-                      </span>
+                      {entry.ai_status === "error" ? (
+                        <span className="inline-block rounded-full px-2 py-0.5 text-xs bg-red-100 text-red-800">
+                          Błąd
+                        </span>
+                      ) : entry.answer_model ? (
+                        <span className="text-xs text-muted">
+                          {modelLabels[entry.answer_model] || entry.answer_model}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-muted">—</span>
+                      )}
                     </td>
                     <td className="py-2 px-3 text-right text-muted font-mono text-xs">
                       {entry.tokens_used?.toLocaleString()}
