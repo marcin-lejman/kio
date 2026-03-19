@@ -16,6 +16,11 @@ export default function AdminUsersPage() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [passwordModal, setPasswordModal] = useState<{
+    userId: string;
+    email: string;
+  } | null>(null);
+  const [newPassword, setNewPassword] = useState("");
 
   const fetchUsers = useCallback(async () => {
     try {
@@ -59,6 +64,15 @@ export default function AdminUsersPage() {
     } finally {
       setActionLoading(null);
     }
+  }
+
+  async function handleSetPassword() {
+    if (!passwordModal || !newPassword) return;
+    await handleAction(passwordModal.userId, "/reset-password", "POST", {
+      password: newPassword,
+    });
+    setPasswordModal(null);
+    setNewPassword("");
   }
 
   function formatDate(d: string | null) {
@@ -156,16 +170,16 @@ export default function AdminUsersPage() {
                           })
                         }
                         disabled={actionLoading === u.id}
-                        className="text-xs text-muted hover:text-warning transition-colors disabled:opacity-50"
+                        className="text-xs text-muted hover:text-warning transition-colors disabled:opacity-50 cursor-pointer"
                       >
                         {u.suspended ? "Odblokuj" : "Zawieś"}
                       </button>
                       <button
                         onClick={() =>
-                          handleAction(u.id, "/reset-password", "POST")
+                          setPasswordModal({ userId: u.id, email: u.email })
                         }
                         disabled={actionLoading === u.id}
-                        className="text-xs text-muted hover:text-accent transition-colors disabled:opacity-50"
+                        className="text-xs text-muted hover:text-accent transition-colors disabled:opacity-50 cursor-pointer"
                       >
                         Reset hasła
                       </button>
@@ -180,7 +194,7 @@ export default function AdminUsersPage() {
                           )
                         }
                         disabled={actionLoading === u.id}
-                        className="text-xs text-muted hover:text-error transition-colors disabled:opacity-50"
+                        className="text-xs text-muted hover:text-error transition-colors disabled:opacity-50 cursor-pointer"
                       >
                         Usuń
                       </button>
@@ -200,6 +214,43 @@ export default function AdminUsersPage() {
               )}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {passwordModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-background border border-border rounded-lg shadow-lg p-6 w-full max-w-sm">
+            <h2 className="text-sm font-semibold text-primary mb-1">
+              Ustaw nowe hasło
+            </h2>
+            <p className="text-xs text-muted mb-4">{passwordModal.email}</p>
+            <input
+              type="text"
+              autoFocus
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="Nowe hasło (min. 8 znaków)"
+              className="w-full rounded border border-border bg-background px-3 py-2 text-sm mb-4 focus:outline-none focus:ring-1 focus:ring-accent"
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => {
+                  setPasswordModal(null);
+                  setNewPassword("");
+                }}
+                className="px-3 py-1.5 text-xs text-muted hover:text-primary transition-colors cursor-pointer"
+              >
+                Anuluj
+              </button>
+              <button
+                onClick={handleSetPassword}
+                disabled={newPassword.length < 8 || actionLoading !== null}
+                className="px-3 py-1.5 text-xs bg-accent text-white rounded hover:bg-accent/90 transition-colors disabled:opacity-50 cursor-pointer"
+              >
+                Zapisz hasło
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

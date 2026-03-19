@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 
-// POST — send password reset email
+// POST — set new password for user
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -11,29 +11,23 @@ export async function POST(
   if (authError) return authError;
 
   const { id } = await params;
-  const supabase = createAdminClient();
+  const { password } = await request.json();
 
-  // Get user email
-  const {
-    data: { user: targetUser },
-    error: getUserError,
-  } = await supabase.auth.admin.getUserById(id);
-
-  if (getUserError || !targetUser) {
+  if (!password || typeof password !== "string" || password.length < 8) {
     return NextResponse.json(
-      { error: "Nie znaleziono użytkownika." },
-      { status: 404 }
+      { error: "Hasło musi mieć co najmniej 8 znaków." },
+      { status: 400 }
     );
   }
 
-  // Generate password reset link (sends email automatically)
-  const { error: resetError } = await supabase.auth.admin.generateLink({
-    type: "recovery",
-    email: targetUser.email!,
+  const supabase = createAdminClient();
+
+  const { error: updateError } = await supabase.auth.admin.updateUserById(id, {
+    password,
   });
 
-  if (resetError) {
-    return NextResponse.json({ error: resetError.message }, { status: 500 });
+  if (updateError) {
+    return NextResponse.json({ error: updateError.message }, { status: 500 });
   }
 
   return NextResponse.json({ success: true });
