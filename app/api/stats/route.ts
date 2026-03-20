@@ -6,7 +6,7 @@ export async function GET() {
     const supabase = createAdminClient();
     const { count, error } = await supabase
       .from("verdicts")
-      .select("*", { count: "exact", head: true });
+      .select("*", { count: "planned", head: true });
 
     if (error) throw error;
 
