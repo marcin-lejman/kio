@@ -3,6 +3,7 @@ import { searchBase, streamAnswer, type CostEntry } from "@/lib/search";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { MODELS, estimateCost } from "@/lib/openrouter";
 import { rateLimit } from "@/lib/rate-limit";
+import { getSessionUser } from "@/lib/auth";
 import type { SearchFilters } from "@/lib/search";
 
 export async function POST(request: NextRequest) {
@@ -11,6 +12,7 @@ export async function POST(request: NextRequest) {
   if (limited) return limited;
 
   try {
+    const user = await getSessionUser(request);
     const body = await request.json();
     const { query, filters, answer_model } = body as {
       query: string;
@@ -136,6 +138,7 @@ export async function POST(request: NextRequest) {
 
               // Save to database and get the search_id
               const searchId = await saveSearchHistory({
+                user_id: user?.id ?? null,
                 query: base.query,
                 filters: filters || null,
                 verdicts: base.verdicts,
@@ -170,6 +173,7 @@ export async function POST(request: NextRequest) {
             };
 
             const searchId = await saveSearchHistory({
+              user_id: user?.id ?? null,
               query: base.query,
               filters: filters || null,
               verdicts: base.verdicts,
@@ -326,6 +330,7 @@ function validateSygnaturaRefs(
 }
 
 async function saveSearchHistory(result: {
+  user_id: string | null;
   query: string;
   filters: SearchFilters | null;
   verdicts: { verdict_id: number }[];
@@ -341,6 +346,7 @@ async function saveSearchHistory(result: {
     const { data, error } = await supabase
       .from("search_history")
       .insert({
+        user_id: result.user_id,
         query: result.query,
         filters: result.filters,
         result_count: result.verdicts.length,

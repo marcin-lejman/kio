@@ -13,6 +13,7 @@ interface HistoryEntry {
   cost_usd: number;
   latency_ms: number;
   created_at: string;
+  user_email: string | null;
 }
 
 const modelLabels: Record<string, string> = {
@@ -92,7 +93,10 @@ export default function HistoryPage() {
                     key={entry.id}
                     className="border-b border-border/50 hover:bg-accent/5 transition-colors"
                   >
-                    <td className="py-2 px-3 text-muted whitespace-nowrap">
+                    <td
+                      className="py-2 px-3 text-muted whitespace-nowrap"
+                      title={entry.user_email || undefined}
+                    >
                       {new Date(entry.created_at).toLocaleDateString("pl-PL", {
                         day: "2-digit",
                         month: "2-digit",
