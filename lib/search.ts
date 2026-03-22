@@ -94,7 +94,7 @@ export interface CostEntry {
 // Verdict Envelope — enriched per-verdict context for AI overview
 // ============================================================
 
-const ENVELOPE_MAX_VERDICTS = 10;
+const ENVELOPE_MAX_VERDICTS = 15;
 const ENVELOPE_TOKEN_BUDGET = 40_000;
 const ENVELOPE_MAX_MATCHED_PER_VERDICT = 3;
 
@@ -944,7 +944,37 @@ function computeVerdictScore(passages: { score: number }[]): number {
   return best + bonus;
 }
 
-function groupByVerdict(chunks: ChunkResult[], maxVerdicts: number = 15): VerdictResult[] {
+/**
+ * Compute group coverage for a verdict: what fraction of keyword groups
+ * are represented across all of the verdict's matching chunks.
+ * Returns a multiplier (1.0 = no boost, up to 2.0 for full coverage).
+ */
+function computeGroupCoverageBoost(
+  passages: { chunk_text: string }[],
+  keywordGroups: KeywordGroup[],
+): number {
+  if (keywordGroups.length === 0) return 1.0;
+
+  // Combine all passage text, build word set once
+  const combinedText = passages.map(p => p.chunk_text).join(" ");
+  const textWords = textToWordSet(combinedText);
+
+  let groupsMatched = 0;
+  for (const group of keywordGroups) {
+    if (chunkMatchesGroup(combinedText, group, textWords)) {
+      groupsMatched++;
+    }
+  }
+
+  // Linear boost: 1.0 (no groups matched) to 2.0 (all groups matched)
+  return 1.0 + (groupsMatched / keywordGroups.length);
+}
+
+function groupByVerdict(
+  chunks: ChunkResult[],
+  maxVerdicts: number = 15,
+  keywordGroups?: KeywordGroup[],
+): VerdictResult[] {
   const verdictMap = new Map<number, VerdictResult>();
 
   for (const chunk of chunks) {
@@ -978,9 +1008,13 @@ function groupByVerdict(chunks: ChunkResult[], maxVerdicts: number = 15): Verdic
     }
   }
 
-  // Recompute verdict scores with multi-chunk bonus
+  // Recompute verdict scores with multi-chunk bonus + group coverage
   for (const v of verdictMap.values()) {
-    v.relevance_score = computeVerdictScore(v.matching_passages);
+    const baseScore = computeVerdictScore(v.matching_passages);
+    const coverageBoost = keywordGroups && keywordGroups.length > 1
+      ? computeGroupCoverageBoost(v.matching_passages, keywordGroups)
+      : 1.0;
+    v.relevance_score = baseScore * coverageBoost;
   }
 
   return Array.from(verdictMap.values())
@@ -1333,7 +1367,7 @@ export async function searchBase(
   costs.push(rerankCost);
   totalTokens += rerankCost.input_tokens + rerankCost.output_tokens;
 
-  const verdicts = groupByVerdict(rerankedChunks, 100);
+  const verdicts = groupByVerdict(rerankedChunks, 100, understanding.keyword_groups);
 
   const sygnaturaMap: Record<string, number> = {};
   for (const v of verdicts) {
