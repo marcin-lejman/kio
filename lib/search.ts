@@ -22,6 +22,7 @@ export interface KeywordGroup {
 export interface QueryUnderstanding {
   keywords: string[];
   keyword_groups?: KeywordGroup[];
+  mandatory_terms?: string[];  // +keyword terms that MUST appear in results
   semantic_query: string;
   filters: SearchFilters;
 }
@@ -144,6 +145,7 @@ Formy w grupie są wyszukiwane operatorem OR w indeksie pełnotekstowym. Grupy �
 - Priorytet form: (1) odmiany jednowyrazowe kluczowych słów, (2) synonimy jednowyrazowe, (3) frazy 2-3 wyrazowe jako bonus.
 - FLEKSJA: Indeks używa konfiguracji 'simple' BEZ stemmingu — każda forma fleksyjna to osobny token. Dlatego odmieniaj kluczowe rzeczowniki i przymiotniki przez WSZYSTKIE przypadki (M, D, C, B, N, Mc). Bez tego formy jak "wadiem" (narzędnik) czy "wykluczeniu" (miejscownik) nie zostaną znalezione.
 - NIE dodawaj jako form jednowyrazowych OGÓLNYCH terminów prawnych, które występują w niemal każdym orzeczeniu KIO (np. "postępowanie", "zamawiający", "zamówienie", "oferta", "ustawa"). Takie terminy pasują do wszystkich dokumentów i powodują timeout wyszukiwania. Używaj ich WYŁĄCZNIE jako część fraz wielowyrazowych. Np. dla konceptu "tryb postępowania": generuj "tryb", "trybu", "trybem" ale NIE "postępowanie", "postępowania" osobno — zachowaj je w frazach "tryb postępowania".
+- NIE dodawaj OGÓLNYCH rzeczowników, które pasują do wielu branż i tematów i nie wnoszą informacji wyszukiwawczej. Przykłady: "produkt", "produktów", "usługa", "usługi", "dostawa", "dostawy", "dokument", "dokumenty", "element", "elementy", "materiał", "materiały", "przedmiot", "przedmiotu", "zakres", "zakresu", "sposób", "warunek", "warunki", "wymaganie", "wymagania", "środek", "środki". Takie słowa generują szum — pasują do setek orzeczeń niezwiązanych z zapytaniem. Używaj ich WYŁĄCZNIE w frazach wielowyrazowych (np. "dostawa wyrobów medycznych", nie "dostawa" osobno).
 
 ZASADY WAGI (weight) I WYMAGALNOŚCI (required):
 - Każda grupa ma pole "weight" (float 1.0-3.0) — jak centralna jest grupa dla intencji zapytania.
@@ -201,6 +203,23 @@ keyword_groups: [
 
 Odpowiedz WYŁĄCZNIE prawidłowym JSON-em bez markdown, bez komentarzy:
 {"keyword_groups": [{"concept": "...", "forms": [...], "weight": 2.5, "required": true}, ...], "semantic_query": "...", "filters": {}}`;
+
+/**
+ * Extract +mandatory terms from the query. Supports +word and +"multi word".
+ * Returns the cleaned query (without + terms) and the extracted terms.
+ */
+export function extractMandatoryTerms(query: string): { cleanQuery: string; mandatoryTerms: string[] } {
+  const terms: string[] = [];
+  const cleanQuery = query
+    .replace(/\+("([^"]+)"|(\S+))/g, (_, _full, quoted, unquoted) => {
+      const term = (quoted || unquoted).trim();
+      if (term) terms.push(term);
+      return "";
+    })
+    .replace(/\s+/g, " ")
+    .trim();
+  return { cleanQuery, mandatoryTerms: terms };
+}
 
 export async function queryUnderstanding(userQuery: string, model?: string): Promise<{ result: QueryUnderstanding; cost: CostEntry }> {
   const response = await chatCompletion(
@@ -463,142 +482,91 @@ interface FtsResult {
 }
 
 /**
+ * Build a tsquery AND clause for mandatory +terms.
+ * Each term is expanded with diacritic variants and converted to a tsquery fragment.
+ */
+function buildMandatoryClause(terms: string[]): string {
+  return terms
+    .map(term => {
+      const expanded = expandWithDiacriticVariants([term]);
+      const fragments = expanded.map(keywordToTsFragment).filter(Boolean) as string[];
+      if (fragments.length === 0) return null;
+      if (fragments.length === 1) return fragments[0];
+      return `( ${fragments.join(" | ")} )`;
+    })
+    .filter(Boolean)
+    .join(" & ");
+}
+
+/**
+ * Split text into a set of unique words for word-boundary matching.
+ * Uses Unicode-aware splitting to handle Polish characters (ą, ć, ę, etc.).
+ */
+function textToWordSet(text: string): Set<string> {
+  return new Set(text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean));
+}
+
+/**
  * Check if a chunk's text contains any form from a keyword group.
- * Used for client-side per-group scoring after a combined FTS query.
+ * Uses whole-word matching (not substring) to avoid false positives
+ * like "lek" matching "elektryczny".
+ * For multi-word forms, checks if ALL words appear in the text.
+ * Pass pre-computed textWords for performance in hot loops.
  */
-function chunkMatchesGroup(text: string, group: KeywordGroup): boolean {
-  const textLower = text.toLowerCase();
+function chunkMatchesGroup(text: string, group: KeywordGroup, textWords?: Set<string>): boolean {
+  const words = textWords ?? textToWordSet(text);
   return group.forms.some(form => {
-    const words = form.toLowerCase().split(/\s+/);
-    return words.every(w => textLower.includes(w));
+    const formWords = form.toLowerCase().split(/\s+/);
+    return formWords.every(w => words.has(w));
   });
 }
 
 /**
- * Client-side per-group scoring: check which groups each chunk matches,
- * compute weighted score, sort and return top results.
- */
-function scoreChunksWithGroups(
-  data: Record<string, unknown>[],
-  groups: KeywordGroup[],
-  limit: number,
-): ChunkResult[] {
-  const results = data.map(row => {
-    const chunk = mapFtsRow(row);
-    let score = 0;
-    for (const group of groups) {
-      if (chunkMatchesGroup(chunk.chunk_text, group)) {
-        score += group.weight ?? 1.0;
-      }
-    }
-    // ts_rank as tiebreaker (scaled down relative to group weights)
-    score += ((row.rank as number) || 0) * 0.1;
-    return { ...chunk, score };
-  });
-
-  results.sort((a, b) => b.score - a.score);
-  return results.slice(0, limit);
-}
-
-/**
- * Pick the most selective group for use as AND-anchor in the combined query.
- * Heuristic: highest ratio of multi-word phrase forms to total forms.
- * Multi-word phrases require adjacency matching — their GIN posting lists
- * are much smaller than single-word forms, making AND intersections fast.
- */
-function pickAnchorGroup(groups: KeywordGroup[]): KeywordGroup {
-  return groups.reduce((best, g) => {
-    const ratio = g.forms.filter(f => f.trim().includes(" ")).length / Math.max(g.forms.length, 1);
-    const bestRatio = best.forms.filter(f => f.trim().includes(" ")).length / Math.max(best.forms.length, 1);
-    return ratio > bestRatio ? g : best;
-  });
-}
-
-/**
- * Multi-group weighted FTS: single combined query + client-side group scoring.
+ * Multi-group weighted FTS: unranked query + client-side group scoring.
  *
- * Strategy: AND the required group with ONE selective optional group (the
- * "anchor" — picked by highest multi-word phrase ratio). This keeps the GIN
- * intersection small and ts_rank computation fast, even when required terms
- * like "kryteria" or "ocena" match nearly every document.
+ * Uses ftsQueryUnranked (no ts_rank, no ORDER BY) so LIMIT is effective
+ * regardless of how broad the query terms are.
  *
- * Then scores each returned chunk client-side by checking which of ALL groups
- * its text matches: score = Σ weight_i for each matched group + ts_rank * 0.1.
+ * Query strategy: OR all forms from all groups. The unranked approach
+ * makes this safe — no ts_rank bottleneck even on huge match sets.
+ * Client-side scoring by group coverage is the primary ranking signal.
  *
- * Fallback chain:
- *   1. required & anchor  (fast — small intersection)
- *   2. anchor alone        (if #1 too restrictive or timeout)
- *   3. return empty        (vector search still provides results)
+ * Fallback: if OR-all times out (unlikely without ts_rank), return empty.
  */
 async function ftsSearchWeighted(
   groups: KeywordGroup[],
   filters: SearchFilters,
   limit: number,
+  mandatoryTerms?: string[],
 ): Promise<FtsResult> {
-  const supabase = createAdminClient();
+  const queryLimit = Math.min(limit * 3, 1000);
 
-  const requiredGroups = groups.filter(g => g.required);
-  const optionalGroups = groups.filter(g => !g.required);
+  // Build combined query: OR all forms from all groups
+  const combinedQuery = groups.map(g => buildGroupTsQuery(g)).join(" | ");
+  if (!combinedQuery) return { results: [], timedOut: true };
 
-  // Pick the most selective optional group as AND-anchor
-  const anchorGroup = optionalGroups.length > 0
-    ? pickAnchorGroup(optionalGroups)
-    : null;
+  const { results, timedOut } = await ftsQueryUnranked(
+    combinedQuery, filters, queryLimit, mandatoryTerms
+  );
 
-  const queryLimit = Math.min(limit * 3, 500);
-  const rpcFilters = {
-    filter_type: filters.document_type || null,
-    filter_decision: filters.decision_type || null,
-    filter_date_from: filters.date_from || null,
-    filter_date_to: filters.date_to || null,
-  };
-
-  // Attempt 1: required & anchor (fast — GIN AND on small posting lists)
-  if (requiredGroups.length > 0 && anchorGroup) {
-    const requiredPart = requiredGroups
-      .map(g => `( ${buildGroupTsQuery(g)} )`)
-      .join(" & ");
-    const query = `${requiredPart} & ( ${buildGroupTsQuery(anchorGroup)} )`;
-
-    const { data, error } = await supabase.rpc("search_chunks_fts", {
-      search_query: query,
-      match_count: queryLimit,
-      ...rpcFilters,
-    });
-
-    if (!error && data && data.length >= 5) {
-      return {
-        results: scoreChunksWithGroups(data, groups, limit),
-        timedOut: false,
-      };
-    }
-    if (error && !error.message?.includes("statement timeout")) {
-      throw new Error(`FTS search error: ${error.message}`);
-    }
-    // Timeout or < 5 results → fall through
+  if (timedOut || results.length === 0) {
+    return { results: [], timedOut };
   }
 
-  // Attempt 2: anchor group alone (most specific, fast)
-  const fallbackGroup = anchorGroup || (requiredGroups.length > 0 ? requiredGroups[0] : groups[0]);
-  const fallbackQuery = buildGroupTsQuery(fallbackGroup);
-
-  if (fallbackQuery) {
-    const { data, error } = await supabase.rpc("search_chunks_fts", {
-      search_query: fallbackQuery,
-      match_count: queryLimit,
-      ...rpcFilters,
-    });
-
-    if (!error && data && data.length > 0) {
-      return {
-        results: scoreChunksWithGroups(data, groups, limit),
-        timedOut: false,
-      };
+  // Score by group coverage: Σ weight_i for each matched group
+  for (const chunk of results) {
+    const textWords = textToWordSet(chunk.chunk_text);
+    let score = 0;
+    for (const group of groups) {
+      if (chunkMatchesGroup(chunk.chunk_text, group, textWords)) {
+        score += group.weight ?? 1.0;
+      }
     }
+    chunk.score = score;
   }
 
-  // Everything failed — vector search is the only source
-  return { results: [], timedOut: true };
+  results.sort((a, b) => b.score - a.score);
+  return { results: results.slice(0, limit), timedOut: false };
 }
 
 async function ftsSearch(
@@ -606,19 +574,23 @@ async function ftsSearch(
   filters: SearchFilters,
   limit: number = 50,
   keywordGroups?: KeywordGroup[],
+  mandatoryTerms?: string[],
 ): Promise<FtsResult> {
   // Multi-group: weighted per-group approach
   if (keywordGroups && keywordGroups.length > 1) {
-    return ftsSearchWeighted(keywordGroups, filters, limit);
+    return ftsSearchWeighted(keywordGroups, filters, limit, mandatoryTerms);
   }
 
-  // Single group or flat keywords: simple single-query approach
-  const searchQuery = keywordGroups && keywordGroups.length === 1
-    ? buildGroupTsQuery(keywordGroups[0])
-    : expandWithDiacriticVariants(keywords)
-        .map(keywordToTsFragment)
-        .filter(Boolean)
-        .join(" | ");
+  // Single group: prefer multi-word phrases for selectivity
+  if (keywordGroups && keywordGroups.length === 1) {
+    return ftsSearchSingleGroup(keywordGroups[0], filters, limit, mandatoryTerms);
+  }
+
+  // No groups: flat OR of all keywords
+  const searchQuery = expandWithDiacriticVariants(keywords)
+    .map(keywordToTsFragment)
+    .filter(Boolean)
+    .join(" | ");
 
   if (!searchQuery) return { results: [], timedOut: false };
 
@@ -641,6 +613,131 @@ async function ftsSearch(
   }
 
   return { results: mapFtsRows(data || []), timedOut: false };
+}
+
+/**
+ * Unranked FTS query using Supabase .textSearch() directly.
+ * No ts_rank computation, no ORDER BY — just GIN index scan + LIMIT.
+ * This makes LIMIT effective: PostgreSQL stops after finding N matches
+ * instead of scoring all matching rows first.
+ *
+ * Returns ChunkResult[] with score=0 — caller must assign scores.
+ */
+async function ftsQueryUnranked(
+  query: string,
+  filters: SearchFilters,
+  limit: number,
+  mandatoryTerms?: string[],
+): Promise<{ results: ChunkResult[]; timedOut: boolean }> {
+  // AND mandatory +terms into the query
+  let finalQuery = query;
+  if (mandatoryTerms && mandatoryTerms.length > 0) {
+    const mandatoryClause = buildMandatoryClause(mandatoryTerms);
+    if (mandatoryClause) {
+      finalQuery = `( ${query} ) & ${mandatoryClause}`;
+    }
+  }
+
+  const supabase = createAdminClient();
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let builder: any = supabase
+    .from("chunks")
+    .select(`
+      id, verdict_id, section_label, chunk_position, total_chunks,
+      preamble, chunk_text,
+      verdicts!inner(
+        sygnatura, verdict_date, document_type, document_type_normalized,
+        decision_type, decision_type_normalized, chunking_tier
+      )
+    `)
+    .textSearch("fts_vector", finalQuery, { config: "simple" })
+    .limit(limit);
+
+  if (filters.document_type) {
+    builder = builder.eq("verdicts.document_type_normalized", filters.document_type);
+  }
+  if (filters.decision_type) {
+    builder = builder.eq("verdicts.decision_type_normalized", filters.decision_type);
+  }
+  if (filters.date_from) {
+    builder = builder.gte("verdicts.verdict_date", filters.date_from);
+  }
+  if (filters.date_to) {
+    builder = builder.lte("verdicts.verdict_date", filters.date_to);
+  }
+
+  const { data, error } = await builder;
+
+  if (error) {
+    if (error.message?.includes("statement timeout")) {
+      return { results: [], timedOut: true };
+    }
+    throw new Error(`FTS unranked query error: ${error.message}`);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const results: ChunkResult[] = (data || []).map((row: any) => {
+    const v = row.verdicts;
+    return {
+      chunk_id: row.id as number,
+      verdict_id: row.verdict_id as number,
+      section_label: row.section_label as string,
+      chunk_position: row.chunk_position as number,
+      total_chunks: row.total_chunks as number,
+      preamble: row.preamble as string,
+      chunk_text: row.chunk_text as string,
+      score: 0,
+      source: "fts" as const,
+      sygnatura: v.sygnatura as string,
+      verdict_date: v.verdict_date as string,
+      document_type: v.document_type as string,
+      document_type_normalized: v.document_type_normalized as string,
+      decision_type: v.decision_type as string,
+      decision_type_normalized: v.decision_type_normalized as string,
+      chunking_tier: v.chunking_tier as string,
+    };
+  });
+
+  return { results, timedOut: false };
+}
+
+/**
+ * Single-group FTS: unranked query with all forms, score client-side
+ * by counting how many forms from the group match the chunk text.
+ */
+async function ftsSearchSingleGroup(
+  group: KeywordGroup,
+  filters: SearchFilters,
+  limit: number,
+  mandatoryTerms?: string[],
+): Promise<FtsResult> {
+  const fullQuery = buildGroupTsQuery(group);
+  if (!fullQuery) return { results: [], timedOut: false };
+
+  const { results, timedOut } = await ftsQueryUnranked(
+    fullQuery, filters, Math.min(limit * 3, 1000), mandatoryTerms
+  );
+
+  if (timedOut || results.length === 0) {
+    return { results: [], timedOut };
+  }
+
+  // Score by counting matching forms — chunks with more matches rank higher
+  for (const chunk of results) {
+    const textWords = textToWordSet(chunk.chunk_text);
+    let matchCount = 0;
+    for (const form of group.forms) {
+      const formWords = form.toLowerCase().split(/\s+/);
+      if (formWords.every(w => textWords.has(w))) {
+        matchCount++;
+      }
+    }
+    chunk.score = matchCount;
+  }
+
+  results.sort((a, b) => b.score - a.score);
+  return { results: results.slice(0, limit), timedOut: false };
 }
 
 function mapFtsRow(row: Record<string, unknown>): ChunkResult {
@@ -1166,9 +1263,15 @@ export async function searchBase(
   const costs: CostEntry[] = [];
   let totalTokens = 0;
 
-  // Layer 1: Query Understanding
+  // Extract +mandatory terms before LLM sees the query
+  const { cleanQuery, mandatoryTerms } = extractMandatoryTerms(userQuery);
+
+  // Layer 1: Query Understanding (receives query without + syntax)
   onStatus?.("query_understanding");
-  const { result: understanding, cost: l1Cost } = await queryUnderstanding(userQuery, queryModel);
+  const { result: understanding, cost: l1Cost } = await queryUnderstanding(
+    cleanQuery || userQuery, queryModel
+  );
+  understanding.mandatory_terms = mandatoryTerms.length > 0 ? mandatoryTerms : undefined;
   costs.push(l1Cost);
   totalTokens += l1Cost.input_tokens + l1Cost.output_tokens;
 
@@ -1196,7 +1299,7 @@ export async function searchBase(
   const dbSearchStart = Date.now();
   const [vectorResults, ftsResult] = await Promise.all([
     vectorSearch(embedding, mergedFilters, 150),
-    ftsSearch(understanding.keywords, mergedFilters, 150, understanding.keyword_groups),
+    ftsSearch(understanding.keywords, mergedFilters, 150, understanding.keyword_groups, understanding.mandatory_terms),
   ]);
   const ftsResults = ftsResult.results;
   costs.push({
@@ -1209,7 +1312,19 @@ export async function searchBase(
   });
 
   // Layer 2: Reciprocal Rank Fusion
-  const fusedChunks = reciprocalRankFusion(vectorResults, ftsResults);
+  let fusedChunks = reciprocalRankFusion(vectorResults, ftsResults);
+
+  // Post-filter: mandatory +terms must appear in chunk text (catches vector results too)
+  if (understanding.mandatory_terms && understanding.mandatory_terms.length > 0) {
+    const requiredTerms = understanding.mandatory_terms;
+    fusedChunks = fusedChunks.filter(chunk => {
+      const textWords = textToWordSet(chunk.chunk_text);
+      return requiredTerms.every(term => {
+        const termWords = term.toLowerCase().split(/\s+/);
+        return termWords.every(w => textWords.has(w));
+      });
+    });
+  }
 
   // Layer 2.5: LLM Reranking
   onStatus?.("reranking");
