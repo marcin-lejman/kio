@@ -15,6 +15,8 @@ export interface SearchFilters {
 export interface KeywordGroup {
   concept: string;
   forms: string[];
+  weight?: number;    // importance weight 1.0-3.0 (default 1.0)
+  required?: boolean; // chunk must match this group to be included (default false)
 }
 
 export interface QueryUnderstanding {
@@ -122,7 +124,7 @@ export interface VerdictEnvelope {
 const QUERY_UNDERSTANDING_PROMPT = `Jesteś asystentem wyszukiwarki orzeczeń Krajowej Izby Odwoławczej (KIO) w zamówieniach publicznych.
 
 Twoim zadaniem jest analiza zapytania użytkownika i wygenerowanie:
-1. keyword_groups — lista GRUP pojęciowych. Każda grupa to jeden koncept z zapytania, z wariantami gramatycznymi i synonimy. Generuj 5-15 form na grupę. Każda grupa: {"concept": "nazwa_konceptu", "forms": ["forma1", "forma2", ...]}.
+1. keyword_groups — lista GRUP pojęciowych. Każda grupa to jeden koncept z zapytania, z wariantami gramatycznymi i synonimy. Generuj 5-15 form na grupę. Każda grupa: {"concept": "nazwa_konceptu", "forms": ["forma1", "forma2", ...], "weight": 1.0-3.0, "required": true/false}.
 2. semantic_query — przeformułowane zapytanie semantyczne zoptymalizowane pod wyszukiwanie wektorowe w kontekście orzecznictwa KIO.
 3. filters — opcjonalne filtry (document_type: "wyrok"|"postanowienie", decision_type: "oddalone"|"uwzglednione"|"umorzone"|"odrzucone", date_from, date_to w formacie YYYY-MM-DD).
 
@@ -140,7 +142,16 @@ Formy w grupie są wyszukiwane operatorem OR w indeksie pełnotekstowym. Grupy �
 - Dla konceptu-przymiotnika (np. "niewłaściwy"): formy jednowyrazowe to odmiany tego przymiotnika (niewłaściwy, niewłaściwego, niewłaściwym) + synonimy jednowyrazowe (wadliwy, nieprawidłowy, błędny).
 - Dla konceptu-frazy (np. "rażąco niska cena"): formy to WYRÓŻNIAJĄCE słowa frazy odmienione jednowyrazowo (rażąco, rażąca) + pełne krótkie frazy (rażąco niska cena, rażąco niskiej ceny) + synonimy jednowyrazowe.
 - Priorytet form: (1) odmiany jednowyrazowe kluczowych słów, (2) synonimy jednowyrazowe, (3) frazy 2-3 wyrazowe jako bonus.
+- FLEKSJA: Indeks używa konfiguracji 'simple' BEZ stemmingu — każda forma fleksyjna to osobny token. Dlatego odmieniaj kluczowe rzeczowniki i przymiotniki przez WSZYSTKIE przypadki (M, D, C, B, N, Mc). Bez tego formy jak "wadiem" (narzędnik) czy "wykluczeniu" (miejscownik) nie zostaną znalezione.
 - NIE dodawaj jako form jednowyrazowych OGÓLNYCH terminów prawnych, które występują w niemal każdym orzeczeniu KIO (np. "postępowanie", "zamawiający", "zamówienie", "oferta", "ustawa"). Takie terminy pasują do wszystkich dokumentów i powodują timeout wyszukiwania. Używaj ich WYŁĄCZNIE jako część fraz wielowyrazowych. Np. dla konceptu "tryb postępowania": generuj "tryb", "trybu", "trybem" ale NIE "postępowanie", "postępowania" osobno — zachowaj je w frazach "tryb postępowania".
+
+ZASADY WAGI (weight) I WYMAGALNOŚCI (required):
+- Każda grupa ma pole "weight" (float 1.0-3.0) — jak centralna jest grupa dla intencji zapytania.
+- Rdzeń zapytania (główny koncept prawny): weight 2.5-3.0, required: true.
+- Istotne koncepty wspierające (sedno problemu, okoliczności kluczowe): weight 1.5-2.5.
+- Kontekst, branża, uzupełnienia: weight 1.0-1.5.
+- Maksymalnie JEDNA grupa może mieć "required": true — to rdzeń zapytania, bez którego wynik jest irrelewantny.
+- Jeśli zapytanie jest ogólne i nie ma wyraźnego rdzenia, żadna grupa nie musi być required (wszystkie required: false).
 
 ZASADY SEMANTIC_QUERY:
 - Przeformułuj zapytanie jako 1-2 zdania opisujące istotę problemu prawnego.
@@ -166,30 +177,30 @@ PRZYKŁADY:
 
 Zapytanie: "wycofanie wadium"
 keyword_groups: [
-  {"concept": "wycofanie", "forms": ["wycofanie", "wycofania", "wycofaniu", "wycofać", "wycofał", "cofnięcie", "cofnięcia", "zwrot", "zwrotu", "zwrócenie"]},
-  {"concept": "wadium", "forms": ["wadium", "wadiem", "wadialne", "zabezpieczenie wadialne", "zabezpieczenia wadialnego"]}
+  {"concept": "wycofanie", "weight": 2.5, "required": true, "forms": ["wycofanie", "wycofania", "wycofaniu", "wycofać", "wycofał", "cofnięcie", "cofnięcia", "zwrot", "zwrotu", "zwrócenie"]},
+  {"concept": "wadium", "weight": 2.5, "required": false, "forms": ["wadium", "wadiem", "wadialne", "zabezpieczenie wadialne", "zabezpieczenia wadialnego"]}
 ]
 
 Zapytanie: "rażąco niska cena"
 keyword_groups: [
-  {"concept": "rażąco niska cena", "forms": ["rażąco", "rażąca", "rażąco niska cena", "rażąco niskiej ceny", "rażąco niską cenę", "rażąco niska", "rażąco niskiej", "rażąco niskiego", "rażąco niskie", "kosztorys", "kosztorysu", "kalkulacja", "kalkulacji", "wycena", "wyceny"]}
+  {"concept": "rażąco niska cena", "weight": 3.0, "required": true, "forms": ["rażąco", "rażąca", "rażąco niska cena", "rażąco niskiej ceny", "rażąco niską cenę", "rażąco niska", "rażąco niskiej", "rażąco niskiego", "rażąco niskie", "kosztorys", "kosztorysu", "kalkulacja", "kalkulacji", "wycena", "wyceny"]}
 ]
 
 Zapytanie: "niewłaściwy tryb postępowania"
 keyword_groups: [
-  {"concept": "tryb postępowania", "forms": ["tryb", "trybu", "trybem", "trybie", "tryby", "trybów", "tryb postępowania", "trybu postępowania", "trybie postępowania", "procedura", "procedury", "procedurze"]},
-  {"concept": "niewłaściwy", "forms": ["niewłaściwy", "niewłaściwego", "niewłaściwym", "niewłaściwą", "nieprawidłowy", "nieprawidłowego", "nieprawidłowym", "wadliwy", "wadliwego", "błędny", "błędnego", "naruszenie", "naruszenia"]}
+  {"concept": "tryb postępowania", "weight": 2.5, "required": true, "forms": ["tryb", "trybu", "trybem", "trybie", "tryby", "trybów", "tryb postępowania", "trybu postępowania", "trybie postępowania", "procedura", "procedury", "procedurze"]},
+  {"concept": "niewłaściwy", "weight": 2.0, "required": false, "forms": ["niewłaściwy", "niewłaściwego", "niewłaściwym", "niewłaściwą", "nieprawidłowy", "nieprawidłowego", "nieprawidłowym", "wadliwy", "wadliwego", "błędny", "błędnego", "naruszenie", "naruszenia"]}
 ]
 
 Zapytanie: "wykluczenie wykonawcy za fałszywe oświadczenie"
 keyword_groups: [
-  {"concept": "wykluczenie", "forms": ["wykluczenie", "wykluczenia", "wykluczeniem", "wykluczeniu", "wykluczyć", "przesłanki wykluczenia", "przesłanek wykluczenia", "podstawy wykluczenia"]},
-  {"concept": "wykonawca", "forms": ["wykonawca", "wykonawcy", "wykonawcę", "wykonawców", "wykonawcą", "podmiot", "konsorcjum"]},
-  {"concept": "fałszywe oświadczenie", "forms": ["fałszywe", "fałszywego", "fałszywym", "nieprawdziwe", "nieprawdziwych", "fałszywe oświadczenie", "fałszywego oświadczenia", "nieprawdziwe informacje", "wprowadzenie w błąd", "JEDZ", "oświadczenie", "oświadczenia"]}
+  {"concept": "wykluczenie", "weight": 3.0, "required": true, "forms": ["wykluczenie", "wykluczenia", "wykluczeniem", "wykluczeniu", "wykluczyć", "przesłanki wykluczenia", "przesłanek wykluczenia", "podstawy wykluczenia"]},
+  {"concept": "wykonawca", "weight": 1.0, "required": false, "forms": ["wykonawca", "wykonawcy", "wykonawcę", "wykonawców", "wykonawcą", "podmiot", "konsorcjum"]},
+  {"concept": "fałszywe oświadczenie", "weight": 2.5, "required": false, "forms": ["fałszywe", "fałszywego", "fałszywym", "nieprawdziwe", "nieprawdziwych", "fałszywe oświadczenie", "fałszywego oświadczenia", "nieprawdziwe informacje", "wprowadzenie w błąd", "JEDZ", "oświadczenie", "oświadczenia"]}
 ]
 
 Odpowiedz WYŁĄCZNIE prawidłowym JSON-em bez markdown, bez komentarzy:
-{"keyword_groups": [...], "semantic_query": "...", "filters": {}}`;
+{"keyword_groups": [{"concept": "...", "forms": [...], "weight": 2.5, "required": true}, ...], "semantic_query": "...", "filters": {}}`;
 
 export async function queryUnderstanding(userQuery: string, model?: string): Promise<{ result: QueryUnderstanding; cost: CostEntry }> {
   const response = await chatCompletion(
@@ -203,7 +214,8 @@ export async function queryUnderstanding(userQuery: string, model?: string): Pro
 
   let parsed: QueryUnderstanding;
   try {
-    const raw = JSON.parse(response.content);
+    const cleaned = response.content.replace(/```json?\s*/g, "").replace(/```/g, "").trim();
+    const raw = JSON.parse(cleaned);
     parsed = raw as QueryUnderstanding;
 
     // Ensure keyword_groups is properly structured
@@ -215,6 +227,15 @@ export async function queryUnderstanding(userQuery: string, model?: string): Pro
       // Safeguard: ensure each group has single-word forms for FTS recall
       if (parsed.keyword_groups.length > 0) {
         parsed.keyword_groups = ensureSingleWordForms(parsed.keyword_groups);
+        // Validate and set defaults for weight/required
+        for (const group of parsed.keyword_groups) {
+          if (typeof group.weight !== "number" || group.weight < 0) {
+            group.weight = 1.0;
+          }
+          if (typeof group.required !== "boolean") {
+            group.required = false;
+          }
+        }
       }
     } else {
       // No valid groups — clear the field so buildTsQuery falls back to flat OR
@@ -231,10 +252,22 @@ export async function queryUnderstanding(userQuery: string, model?: string): Pro
     if (!parsed.filters) {
       parsed.filters = {};
     }
-  } catch {
-    // Fallback: use the query as-is
+  } catch (err) {
+    // Fallback: use the query as-is, filtering out stop words and common legal terms
+    // that match nearly every document and cause FTS timeouts
+    console.warn("Query understanding JSON parse failed, using fallback:", err);
+    const FALLBACK_STOP = new Set([
+      ...POLISH_STOP_WORDS,
+      'kio', 'orzeczenia', 'orzeczenie', 'dotyczące', 'dotyczace', 'przetarg',
+      'przetargu', 'przetargach', 'przetargi', 'zamówienie', 'zamówienia',
+      'zamowienie', 'zamowienia', 'postępowanie', 'postępowania', 'postepowanie',
+      'oferta', 'oferty', 'ofert', 'zamawiający', 'zamawiajacy', 'wykonawca',
+      'wykonawcy', 'ustawa', 'ustawy', 'przepis', 'przepisy', 'zbyt',
+    ]);
     parsed = {
-      keywords: userQuery.split(/\s+/).filter(w => w.length > 2),
+      keywords: userQuery.split(/\s+/)
+        .map(w => w.replace(/[–—,.:;!?()]/g, ''))
+        .filter(w => w.length > 2 && !FALLBACK_STOP.has(w.toLowerCase())),
       semantic_query: userQuery,
       filters: {},
     };
@@ -399,53 +432,26 @@ function keywordToTsFragment(kw: string): string | null {
 }
 
 /**
- * Build a tsquery string from keyword groups (concept-grouped) or flat keywords.
- *
- * With groups: AND between concept groups, OR within each group's forms.
- *   e.g. (wycofanie | wycofania | cofnięcie) & (wadium | wadiem)
- *
- * Without groups (fallback): all keywords OR'd together (legacy behavior).
+ * Build an OR tsquery for a single keyword group's forms (with diacritic expansion).
  */
-function buildTsQuery(keywords: string[], keywordGroups?: KeywordGroup[]): string {
-  if (keywordGroups && keywordGroups.length > 0) {
-    const groupClauses = keywordGroups
-      .map((group) => {
-        const expandedForms = expandWithDiacriticVariants(group.forms);
-        const fragments = expandedForms
-          .map(keywordToTsFragment)
-          .filter(Boolean) as string[];
-        if (fragments.length === 0) return null;
-        if (fragments.length === 1) return fragments[0];
-        return `( ${fragments.join(" | ")} )`;
-      })
-      .filter(Boolean) as string[];
-
-    if (groupClauses.length === 0) {
-      // All groups empty — fall through to flat keywords
-    } else if (groupClauses.length === 1) {
-      return groupClauses[0];
-    } else {
-      return groupClauses.join(" & ");
-    }
-  }
-
-  // Fallback: flat OR of all keywords (legacy behavior)
-  const expandedKeywords = expandWithDiacriticVariants(keywords);
-  return expandedKeywords
+function buildGroupTsQuery(group: KeywordGroup): string {
+  const expandedForms = expandWithDiacriticVariants(group.forms);
+  const fragments = expandedForms
     .map(keywordToTsFragment)
-    .filter(Boolean)
-    .join(" | ");
+    .filter(Boolean) as string[];
+  return fragments.join(" | ");
 }
 
 /**
- * Build a relaxed (OR-only) tsquery from keyword groups, used when AND query
- * returns too few results.
+ * Build a debug-friendly summary of the FTS query strategy.
  */
-function buildTsQueryRelaxed(keywords: string[], keywordGroups?: KeywordGroup[]): string {
-  const allForms = keywordGroups
-    ? keywordGroups.flatMap((g) => g.forms)
-    : keywords;
-  return allForms
+function buildFtsDebugString(keywords: string[], keywordGroups?: KeywordGroup[]): string {
+  if (keywordGroups && keywordGroups.length > 0) {
+    return keywordGroups.map(g =>
+      `[${g.concept} w=${(g.weight ?? 1.0).toFixed(1)}${g.required ? " REQ" : ""}] ${buildGroupTsQuery(g)}`
+    ).join("\n");
+  }
+  return expandWithDiacriticVariants(keywords)
     .map(keywordToTsFragment)
     .filter(Boolean)
     .join(" | ");
@@ -456,15 +462,167 @@ interface FtsResult {
   timedOut: boolean;
 }
 
+/**
+ * Check if a chunk's text contains any form from a keyword group.
+ * Used for client-side per-group scoring after a combined FTS query.
+ */
+function chunkMatchesGroup(text: string, group: KeywordGroup): boolean {
+  const textLower = text.toLowerCase();
+  return group.forms.some(form => {
+    const words = form.toLowerCase().split(/\s+/);
+    return words.every(w => textLower.includes(w));
+  });
+}
+
+/**
+ * Client-side per-group scoring: check which groups each chunk matches,
+ * compute weighted score, sort and return top results.
+ */
+function scoreChunksWithGroups(
+  data: Record<string, unknown>[],
+  groups: KeywordGroup[],
+  limit: number,
+): ChunkResult[] {
+  const results = data.map(row => {
+    const chunk = mapFtsRow(row);
+    let score = 0;
+    for (const group of groups) {
+      if (chunkMatchesGroup(chunk.chunk_text, group)) {
+        score += group.weight ?? 1.0;
+      }
+    }
+    // ts_rank as tiebreaker (scaled down relative to group weights)
+    score += ((row.rank as number) || 0) * 0.1;
+    return { ...chunk, score };
+  });
+
+  results.sort((a, b) => b.score - a.score);
+  return results.slice(0, limit);
+}
+
+/**
+ * Pick the most selective group for use as AND-anchor in the combined query.
+ * Heuristic: highest ratio of multi-word phrase forms to total forms.
+ * Multi-word phrases require adjacency matching — their GIN posting lists
+ * are much smaller than single-word forms, making AND intersections fast.
+ */
+function pickAnchorGroup(groups: KeywordGroup[]): KeywordGroup {
+  return groups.reduce((best, g) => {
+    const ratio = g.forms.filter(f => f.trim().includes(" ")).length / Math.max(g.forms.length, 1);
+    const bestRatio = best.forms.filter(f => f.trim().includes(" ")).length / Math.max(best.forms.length, 1);
+    return ratio > bestRatio ? g : best;
+  });
+}
+
+/**
+ * Multi-group weighted FTS: single combined query + client-side group scoring.
+ *
+ * Strategy: AND the required group with ONE selective optional group (the
+ * "anchor" — picked by highest multi-word phrase ratio). This keeps the GIN
+ * intersection small and ts_rank computation fast, even when required terms
+ * like "kryteria" or "ocena" match nearly every document.
+ *
+ * Then scores each returned chunk client-side by checking which of ALL groups
+ * its text matches: score = Σ weight_i for each matched group + ts_rank * 0.1.
+ *
+ * Fallback chain:
+ *   1. required & anchor  (fast — small intersection)
+ *   2. anchor alone        (if #1 too restrictive or timeout)
+ *   3. return empty        (vector search still provides results)
+ */
+async function ftsSearchWeighted(
+  groups: KeywordGroup[],
+  filters: SearchFilters,
+  limit: number,
+): Promise<FtsResult> {
+  const supabase = createAdminClient();
+
+  const requiredGroups = groups.filter(g => g.required);
+  const optionalGroups = groups.filter(g => !g.required);
+
+  // Pick the most selective optional group as AND-anchor
+  const anchorGroup = optionalGroups.length > 0
+    ? pickAnchorGroup(optionalGroups)
+    : null;
+
+  const queryLimit = Math.min(limit * 3, 500);
+  const rpcFilters = {
+    filter_type: filters.document_type || null,
+    filter_decision: filters.decision_type || null,
+    filter_date_from: filters.date_from || null,
+    filter_date_to: filters.date_to || null,
+  };
+
+  // Attempt 1: required & anchor (fast — GIN AND on small posting lists)
+  if (requiredGroups.length > 0 && anchorGroup) {
+    const requiredPart = requiredGroups
+      .map(g => `( ${buildGroupTsQuery(g)} )`)
+      .join(" & ");
+    const query = `${requiredPart} & ( ${buildGroupTsQuery(anchorGroup)} )`;
+
+    const { data, error } = await supabase.rpc("search_chunks_fts", {
+      search_query: query,
+      match_count: queryLimit,
+      ...rpcFilters,
+    });
+
+    if (!error && data && data.length >= 5) {
+      return {
+        results: scoreChunksWithGroups(data, groups, limit),
+        timedOut: false,
+      };
+    }
+    if (error && !error.message?.includes("statement timeout")) {
+      throw new Error(`FTS search error: ${error.message}`);
+    }
+    // Timeout or < 5 results → fall through
+  }
+
+  // Attempt 2: anchor group alone (most specific, fast)
+  const fallbackGroup = anchorGroup || (requiredGroups.length > 0 ? requiredGroups[0] : groups[0]);
+  const fallbackQuery = buildGroupTsQuery(fallbackGroup);
+
+  if (fallbackQuery) {
+    const { data, error } = await supabase.rpc("search_chunks_fts", {
+      search_query: fallbackQuery,
+      match_count: queryLimit,
+      ...rpcFilters,
+    });
+
+    if (!error && data && data.length > 0) {
+      return {
+        results: scoreChunksWithGroups(data, groups, limit),
+        timedOut: false,
+      };
+    }
+  }
+
+  // Everything failed — vector search is the only source
+  return { results: [], timedOut: true };
+}
+
 async function ftsSearch(
   keywords: string[],
   filters: SearchFilters,
   limit: number = 50,
   keywordGroups?: KeywordGroup[],
 ): Promise<FtsResult> {
-  const supabase = createAdminClient();
-  const searchQuery = buildTsQuery(keywords, keywordGroups);
+  // Multi-group: weighted per-group approach
+  if (keywordGroups && keywordGroups.length > 1) {
+    return ftsSearchWeighted(keywordGroups, filters, limit);
+  }
 
+  // Single group or flat keywords: simple single-query approach
+  const searchQuery = keywordGroups && keywordGroups.length === 1
+    ? buildGroupTsQuery(keywordGroups[0])
+    : expandWithDiacriticVariants(keywords)
+        .map(keywordToTsFragment)
+        .filter(Boolean)
+        .join(" | ");
+
+  if (!searchQuery) return { results: [], timedOut: false };
+
+  const supabase = createAdminClient();
   const { data, error } = await supabase.rpc("search_chunks_fts", {
     search_query: searchQuery,
     match_count: limit,
@@ -474,7 +632,6 @@ async function ftsSearch(
     filter_date_to: filters.date_to || null,
   });
 
-  // On timeout, degrade gracefully — vector search still provides results
   if (error) {
     if (error.message?.includes("statement timeout")) {
       console.warn(`FTS timeout for query: ${searchQuery.slice(0, 200)}...`);
@@ -483,29 +640,11 @@ async function ftsSearch(
     throw new Error(`FTS search error: ${error.message}`);
   }
 
-  // Safety net: if AND-grouped query returned too few results, retry with relaxed OR
-  if (keywordGroups && keywordGroups.length > 1 && (!data || data.length < 5)) {
-    const relaxedQuery = buildTsQueryRelaxed(keywords, keywordGroups);
-    if (relaxedQuery !== searchQuery) {
-      const { data: relaxedData, error: relaxedError } = await supabase.rpc("search_chunks_fts", {
-        search_query: relaxedQuery,
-        match_count: limit,
-        filter_type: filters.document_type || null,
-        filter_decision: filters.decision_type || null,
-        filter_date_from: filters.date_from || null,
-        filter_date_to: filters.date_to || null,
-      });
-      if (!relaxedError && relaxedData && relaxedData.length > (data?.length || 0)) {
-        return { results: mapFtsRows(relaxedData), timedOut: false };
-      }
-    }
-  }
-
   return { results: mapFtsRows(data || []), timedOut: false };
 }
 
-function mapFtsRows(data: Record<string, unknown>[]): ChunkResult[] {
-  return data.map((row) => ({
+function mapFtsRow(row: Record<string, unknown>): ChunkResult {
+  return {
     chunk_id: row.chunk_id as number,
     verdict_id: row.verdict_id as number,
     section_label: row.section_label as string,
@@ -522,7 +661,11 @@ function mapFtsRows(data: Record<string, unknown>[]): ChunkResult[] {
     decision_type: row.decision_type as string,
     decision_type_normalized: row.decision_type_normalized as string,
     chunking_tier: row.chunking_tier as string,
-  }));
+  };
+}
+
+function mapFtsRows(data: Record<string, unknown>[]): ChunkResult[] {
+  return data.map(mapFtsRow);
 }
 
 // ============================================================
@@ -1133,7 +1276,7 @@ export async function searchBase(
         llm_score: rerankScores[fusedChunks.findIndex(fc => fc.chunk_id === c.chunk_id)] ?? -1,
         original_rank: fusedChunks.findIndex(fc => fc.chunk_id === c.chunk_id),
       })),
-      fts_query: buildTsQuery(understanding.keywords, understanding.keyword_groups),
+      fts_query: buildFtsDebugString(understanding.keywords, understanding.keyword_groups),
       fts_timed_out: ftsResult.timedOut,
       answer_prompt: envelopes.length > 0 ? buildAnswerMessages(userQuery, understanding.semantic_query, envelopes) : null,
     },
