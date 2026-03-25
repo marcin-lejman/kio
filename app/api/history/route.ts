@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
 
     const { data, error, count } = await supabase
       .from("search_history")
-      .select("id, user_id, query, result_count, ai_status, answer_model, tokens_used, cost_usd, latency_ms, created_at", { count: "exact" })
+      .select("id, user_id, query, result_count, ai_status, answer_model, tokens_used, cost_usd, latency_ms, created_at, result_data->search_mode", { count: "exact" })
       .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
 

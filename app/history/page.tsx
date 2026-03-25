@@ -14,6 +14,7 @@ interface HistoryEntry {
   latency_ms: number;
   created_at: string;
   user_email: string | null;
+  search_mode: string | null;
 }
 
 const modelLabels: Record<string, string> = {
@@ -106,12 +107,24 @@ export default function HistoryPage() {
                       })}
                     </td>
                     <td className="py-2 px-3 max-w-md">
-                      <Link
-                        href={`/search/${entry.id}`}
-                        className="text-accent hover:underline truncate block"
-                      >
-                        {entry.query}
-                      </Link>
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className={`flex-shrink-0 rounded w-4 text-center py-0.5 text-[9px] font-bold uppercase leading-none ${
+                            entry.search_mode === "simple"
+                              ? "bg-amber-100 text-amber-700 border border-amber-200"
+                              : "bg-blue-100 text-blue-700 border border-blue-200"
+                          }`}
+                          title={entry.search_mode === "simple" ? "Tryb precyzyjny" : "Tryb inteligentny"}
+                        >
+                          {entry.search_mode === "simple" ? "P" : "I"}
+                        </span>
+                        <Link
+                          href={`/search/${entry.id}`}
+                          className="text-accent hover:underline truncate block"
+                        >
+                          {entry.query}
+                        </Link>
+                      </div>
                     </td>
                     <td className="py-2 px-3 text-right text-muted">
                       {entry.result_count}

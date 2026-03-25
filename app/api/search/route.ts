@@ -149,6 +149,7 @@ export async function POST(request: NextRequest) {
                 ai_overview: fixed,
                 ai_overview_status: "verified",
                 answer_model: selectedModel,
+                search_mode: search_mode || "intelligent",
                 metadata: finalMetadata,
               });
 
@@ -184,6 +185,7 @@ export async function POST(request: NextRequest) {
               ai_overview: null,
               ai_overview_status: "verified",
               answer_model: selectedModel,
+              search_mode: search_mode || "intelligent",
               metadata: finalMetadata,
             });
 
@@ -341,6 +343,7 @@ async function saveSearchHistory(result: {
   ai_overview: string | null;
   ai_overview_status: string;
   answer_model: string;
+  search_mode: string;
   metadata: { time_ms: number; tokens_used: number; cost_usd: number; costs: unknown[] };
 }): Promise<number | null> {
   try {
@@ -364,6 +367,7 @@ async function saveSearchHistory(result: {
           sygnatura_map: result.sygnatura_map,
           debug: result.debug,
           metadata: result.metadata,
+          search_mode: result.search_mode,
         },
       })
       .select("id")

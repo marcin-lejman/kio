@@ -31,6 +31,7 @@ interface SavedSearch {
     sygnatura_map: Record<string, number>;
     debug: DebugData;
     metadata: SearchMetadataType;
+    search_mode?: string;
   } | null;
   created_at: string;
 }
@@ -586,7 +587,7 @@ export default function SearchResultPage() {
     : saved?.answer_model || undefined;
   const searchBarMode = isPending
     ? pendingDataRef.current?.searchMode || undefined
-    : undefined;
+    : (saved?.result_data?.search_mode as SearchMode | undefined) || undefined;
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-8">
