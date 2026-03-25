@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import type { SearchFilters } from "./types";
-import { ANSWER_MODELS } from "./types";
+import type { SearchFilters, SearchMode } from "./types";
+import { ANSWER_MODELS, SEARCH_MODES } from "./types";
 
 export function SearchBar({
   onSearch,
@@ -10,12 +10,14 @@ export function SearchBar({
   initialQuery,
   initialFilters,
   initialModel,
+  initialSearchMode,
 }: {
-  onSearch: (query: string, filters: SearchFilters, answerModel: string) => void;
+  onSearch: (query: string, filters: SearchFilters, answerModel: string, searchMode: SearchMode) => void;
   loading: boolean;
   initialQuery?: string;
   initialFilters?: SearchFilters;
   initialModel?: string;
+  initialSearchMode?: SearchMode;
 }) {
   const [query, setQuery] = useState(initialQuery || "");
   const [showFilters, setShowFilters] = useState(
@@ -23,16 +25,21 @@ export function SearchBar({
   );
   const [filters, setFilters] = useState<SearchFilters>(initialFilters || {});
   const [answerModel, setAnswerModel] = useState(initialModel || ANSWER_MODELS[0].id);
+  const [searchMode, setSearchMode] = useState<SearchMode>(initialSearchMode || "intelligent");
 
   const activeFilterCount = [filters.document_type, filters.decision_type, filters.date_from, filters.date_to].filter(Boolean).length;
+  const currentModeInfo = SEARCH_MODES.find(m => m.id === searchMode)!;
+  const nextMode: SearchMode = searchMode === "intelligent" ? "simple" : "intelligent";
+  const nextModeInfo = SEARCH_MODES.find(m => m.id === nextMode)!;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (query.trim()) onSearch(query.trim(), filters, answerModel);
+    if (query.trim()) onSearch(query.trim(), filters, answerModel, searchMode);
   };
 
   return (
     <form onSubmit={handleSubmit} className="w-full">
+      {/* Search input with integrated mode toggle */}
       <div className="relative">
         <svg
           className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted pointer-events-none"
@@ -48,12 +55,26 @@ export function SearchBar({
           <circle cx="11" cy="11" r="8" />
           <path d="m21 21-4.3-4.3" />
         </svg>
+        {/* Mode pill — inside the search bar, after the icon */}
+        <button
+          type="button"
+          onClick={() => setSearchMode(nextMode)}
+          className="absolute left-10 top-1/2 -translate-y-1/2 rounded border border-border/80 bg-background px-2 py-0.5 text-[11px] font-medium text-muted hover:text-foreground hover:border-accent/50 transition-colors"
+          title={`${currentModeInfo.hint} — kliknij aby przełączyć na: ${nextModeInfo.label}`}
+          disabled={loading}
+        >
+          {currentModeInfo.label}
+        </button>
         <input
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Wyszukaj orzeczenia KIO..."
-          className="w-full rounded-lg border border-border bg-card pl-11 pr-24 py-3.5 text-base shadow-sm focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+          placeholder={
+            searchMode === "simple"
+              ? 'wadium AND "rażąco niska cena"'
+              : "Wyszukaj orzeczenia KIO..."
+          }
+          className="w-full rounded-lg border border-border bg-card pl-[8.5rem] pr-24 py-3.5 text-base shadow-sm focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
           disabled={loading}
         />
         <button
@@ -65,6 +86,18 @@ export function SearchBar({
         </button>
       </div>
 
+      {/* Syntax hint for simple mode */}
+      {searchMode === "simple" && (
+        <p className="mt-1.5 text-xs text-muted/70">
+          Operatory: <span className="font-medium text-muted">AND</span>{" "}
+          <span className="font-medium text-muted">OR</span>{" "}
+          <span className="font-medium text-muted">&quot;frazy w cudzysłowie&quot;</span>{" "}
+          <span className="font-medium text-muted">( nawiasy )</span>
+          {" "}&mdash; domyślnie AND
+        </p>
+      )}
+
+      {/* Model selector — visible, encourages experimentation */}
       <div className="mt-2 flex flex-wrap items-center gap-x-1 gap-y-1">
         <span className="text-xs text-muted mr-1">Model:</span>
         {ANSWER_MODELS.map((m) => (
@@ -85,6 +118,7 @@ export function SearchBar({
         ))}
       </div>
 
+      {/* Filters toggle */}
       <div className="mt-2">
         <button
           type="button"

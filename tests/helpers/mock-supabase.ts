@@ -57,7 +57,9 @@ export function createMockSupabase() {
     return createMockQueryBuilder(result);
   });
 
-  const supabase = { from, auth: { admin: {} } };
+  // Cast to satisfy SupabaseClient type — tests only use .from() and .auth
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const supabase = { from, auth: { admin: {} } } as any;
 
   function reset() {
     tableResults.clear();

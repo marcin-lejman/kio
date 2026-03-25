@@ -54,7 +54,20 @@ export interface DebugData {
   fused_results?: { sygnatura: string; section_label: string; score: number; source: string }[];
   reranked_results?: { sygnatura: string; section_label: string; score: number; llm_score: number; original_rank: number }[];
   answer_prompt?: { role: string; content: string }[] | null;
+  simple_mode?: {
+    original_query: string;
+    parsed_terms: string[];
+    expansions: Record<string, string[]>;
+    tsquery: string;
+  };
 }
+
+export type SearchMode = "intelligent" | "simple";
+
+export const SEARCH_MODES: { id: SearchMode; label: string; hint: string }[] = [
+  { id: "intelligent", label: "Inteligentny", hint: "Wyszukiwanie semantyczne + pełnotekstowe z analizą AI" },
+  { id: "simple", label: "Precyzyjny", hint: "Wyszukiwanie pełnotekstowe z operatorami AND, OR, \"frazy\", nawiasy" },
+];
 
 export const ANSWER_MODELS = [
   { id: "google/gemini-3.1-flash-lite-preview", label: "Gemini Flash Lite", hint: "Najszybszy, ekonomiczny" },

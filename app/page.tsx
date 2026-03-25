@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { SearchBar } from "@/components/search";
-import type { SearchFilters } from "@/components/search";
+import type { SearchFilters, SearchMode } from "@/components/search";
 import { parseSygnatura } from "@/lib/sygnatura";
 
 export default function SearchPage() {
@@ -19,7 +19,7 @@ export default function SearchPage() {
   }, []);
 
   const handleSearch = useCallback(
-    async (query: string, filters: SearchFilters, answerModel: string) => {
+    async (query: string, filters: SearchFilters, answerModel: string, searchMode: SearchMode) => {
       const syg = parseSygnatura(query);
       if (syg) {
         setLoading(true);
@@ -41,7 +41,7 @@ export default function SearchPage() {
 
       sessionStorage.setItem(
         "pending_search",
-        JSON.stringify({ query, filters, answerModel })
+        JSON.stringify({ query, filters, answerModel, searchMode })
       );
       router.push("/search/pending");
     },

@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { searchBase, streamAnswer, type CostEntry } from "@/lib/search";
+import { searchBase, searchBaseSimple, streamAnswer, type CostEntry } from "@/lib/search";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { MODELS, estimateCost } from "@/lib/openrouter";
 import { rateLimit } from "@/lib/rate-limit";
@@ -14,10 +14,11 @@ export async function POST(request: NextRequest) {
   try {
     const user = await getSessionUser(request);
     const body = await request.json();
-    const { query, filters, answer_model } = body as {
+    const { query, filters, answer_model, search_mode } = body as {
       query: string;
       filters?: SearchFilters;
       answer_model?: string;
+      search_mode?: "intelligent" | "simple";
     };
 
     if (!query || typeof query !== "string" || query.trim().length === 0) {
@@ -51,7 +52,8 @@ export async function POST(request: NextRequest) {
 
         try {
           // Layers 1-2: search + rank (inside stream so we can emit status events)
-          const base = await searchBase(query.trim(), filters, (status) => {
+          const searchFn = search_mode === "simple" ? searchBaseSimple : searchBase;
+          const base = await searchFn(query.trim(), filters, (status) => {
             send("status", { step: status });
           }, selectedModel);
 

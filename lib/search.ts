@@ -1,5 +1,5 @@
 import { createAdminClient } from "./supabase/admin";
-import { chatCompletion, chatCompletionStream, embedText, MODELS, type LLMResponse } from "./openrouter";
+import { chatCompletion, chatCompletionStream, embedText, estimateCost, MODELS, type LLMResponse } from "./openrouter";
 
 // ============================================================
 // Types
@@ -1249,14 +1249,21 @@ function buildAnswerContext(envelopes: VerdictEnvelope[]): string {
     .join("\n\n");
 }
 
-function buildAnswerMessages(userQuery: string, semanticQuery: string, envelopes: VerdictEnvelope[]) {
+export function buildAnswerMessages(userQuery: string, semanticQuery: string, envelopes: VerdictEnvelope[]) {
   const context = buildAnswerContext(envelopes);
   const citableList = buildCitableList(envelopes);
+  const count = envelopes.length;
+
+  // For larger sets, instruct the model to be more comprehensive
+  const scopeInstruction = count > 15
+    ? `\n\nWAŻNE: Otrzymujesz ${count} orzeczeń — to rozszerzona analiza. Użytkownik CELOWO poprosił o więcej materiału. Przeanalizuj KAŻDE orzeczenie i uwzględnij je w odpowiedzi (chyba że jest ewidentnie nietrafne). Nie streszczaj nadmiernie — daj pełniejszy obraz orzecznictwa. Odpowiedź powinna być proporcjonalnie dłuższa niż przy 15 orzeczeniach.`
+    : "";
+
   return [
-    { role: "system" as const, content: ANSWER_GENERATION_PROMPT },
+    { role: "system" as const, content: ANSWER_GENERATION_PROMPT + scopeInstruction },
     {
       role: "user" as const,
-      content: `Pytanie użytkownika: ${userQuery}\n\nZapytanie semantyczne: ${semanticQuery}\n\nOrzeczenia KIO:\n\n${context}\n\n========================================\nBIAŁA LISTA SYGNATUR — JEDYNE sygnatury, które możesz cytować:\n${citableList.map(s => `• ${s}`).join("\n")}\n========================================\nUWAGA: Jakiekolwiek odwołanie do sygnatury SPOZA powyższej listy jest niedopuszczalne.`,
+      content: `Pytanie użytkownika: ${userQuery}\n\nZapytanie semantyczne: ${semanticQuery}\n\nLiczba dostarczonych orzeczeń: ${count}\n\nOrzeczenia KIO:\n\n${context}\n\n========================================\nBIAŁA LISTA SYGNATUR — JEDYNE sygnatury, które możesz cytować:\n${citableList.map(s => `• ${s}`).join("\n")}\n========================================\nUWAGA: Jakiekolwiek odwołanie do sygnatury SPOZA powyższej listy jest niedopuszczalne.`,
     },
   ];
 }
@@ -1284,6 +1291,12 @@ export interface SearchBaseResult {
     fts_query: string;
     fts_timed_out: boolean;
     answer_prompt: { role: string; content: string }[] | null;
+    simple_mode?: {
+      original_query: string;
+      parsed_terms: string[];
+      expansions: Record<string, string[]>;
+      tsquery: string;
+    };
   };
 }
 
@@ -1433,6 +1446,285 @@ export async function searchBase(
 }
 
 // ============================================================
+// Simple Search Mode — Boolean FTS with LLM pseudo-stemming
+// ============================================================
+
+const SIMPLE_STEMMING_PROMPT = `Jesteś narzędziem do odmiany polskich słów. Dostajesz listę terminów i dla każdego generujesz odmiany fleksyjne (przypadki: M, D, C, B, N, Mc, W + formy czasownikowe jeśli dotyczy).
+
+ZASADY:
+- Generuj 5-10 form na termin.
+- Dla rzeczowników: wszystkie przypadki liczby pojedynczej + mianownik liczby mnogiej.
+- Dla przymiotników: rodzaj męski, żeński, nijaki + formy przypadkowe.
+- Dla czasowników: bezokolicznik + 3 os. l.poj. + imiesłów bierny + rzeczownik odczasownikowy.
+- Dla fraz wielowyrazowych (w cudzysłowie): odmień CAŁĄ frazę zachowując związek rządu. Np. "opieka medyczna" → ["opieka medyczna", "opieki medycznej", "opieką medyczną", "opiekę medyczną", "opiece medycznej"].
+- Liczby, sygnatury, kody (np. "226", "EU 1925/2025") → zwróć BEZ ZMIAN jako jedyny element.
+- NIE dodawaj synonimów — tylko odmiany tego samego słowa/frazy.
+
+Odpowiedz WYŁĄCZNIE prawidłowym JSON-em: {"terms": {"termin1": ["forma1", "forma2", ...], "termin2": [...]}}`;
+
+/**
+ * Parse a boolean search query into a tsquery string.
+ * Supports: AND, OR, "quoted phrases", parentheses.
+ * Bare words are AND'd by default (like Google).
+ *
+ * Returns the list of unique terms (for LLM stemming) and a function
+ * that builds the final tsquery given the expanded forms.
+ */
+function parseBooleanQuery(query: string): {
+  terms: string[];
+  buildTsQuery: (expansions: Record<string, string[]>) => string;
+} {
+  // Tokenize: extract quoted phrases, operators, parens, and bare words
+  const tokenRegex = /"([^"]+)"|(\bAND\b|\bOR\b|\bAND\b|\bOR\b)|([()])|(\S+)/gi;
+  const tokens: { type: "term" | "op" | "paren"; value: string }[] = [];
+  let match;
+
+  while ((match = tokenRegex.exec(query)) !== null) {
+    if (match[1] !== undefined) {
+      // Quoted phrase
+      tokens.push({ type: "term", value: match[1].trim() });
+    } else if (match[2] !== undefined) {
+      // AND or OR operator
+      tokens.push({ type: "op", value: match[2].toUpperCase() });
+    } else if (match[3] !== undefined) {
+      // Parenthesis
+      tokens.push({ type: "paren", value: match[3] });
+    } else if (match[4] !== undefined) {
+      const word = match[4];
+      // Skip if it's just punctuation
+      if (/^[–—,.:;!?]+$/.test(word)) continue;
+      tokens.push({ type: "term", value: word });
+    }
+  }
+
+  // Extract unique terms
+  const terms = [...new Set(tokens.filter(t => t.type === "term").map(t => t.value))];
+
+  // Build tsquery from tokens + expansions
+  function buildTsQuery(expansions: Record<string, string[]>): string {
+    const parts: string[] = [];
+    let lastWasTerm = false;
+
+    for (const token of tokens) {
+      if (token.type === "paren") {
+        if (token.value === "(" && lastWasTerm) {
+          parts.push("&"); // implicit AND before paren
+        }
+        parts.push(token.value);
+        lastWasTerm = token.value === ")";
+      } else if (token.type === "op") {
+        parts.push(token.value === "OR" ? "|" : "&");
+        lastWasTerm = false;
+      } else {
+        // Term — expand into OR'd forms
+        if (lastWasTerm) {
+          parts.push("&"); // implicit AND between adjacent terms
+        }
+        const forms = expansions[token.value] || [token.value];
+        const expanded = expandWithDiacriticVariants(forms);
+        const fragments = expanded
+          .map(keywordToTsFragment)
+          .filter(Boolean) as string[];
+        if (fragments.length === 0) continue;
+        if (fragments.length === 1) {
+          parts.push(fragments[0]);
+        } else {
+          parts.push(`( ${fragments.join(" | ")} )`);
+        }
+        lastWasTerm = true;
+      }
+    }
+
+    return parts.join(" ");
+  }
+
+  return { terms, buildTsQuery };
+}
+
+/**
+ * LLM pseudo-stemming: expand each term into Polish case forms.
+ */
+async function expandTermForms(
+  terms: string[],
+  model?: string,
+): Promise<{ expansions: Record<string, string[]>; cost: CostEntry }> {
+  if (terms.length === 0) {
+    return {
+      expansions: {},
+      cost: { layer: "stemming", model: "none", input_tokens: 0, output_tokens: 0, cost_usd: 0, latency_ms: 0 },
+    };
+  }
+
+  const response = await chatCompletion(
+    [
+      { role: "system", content: SIMPLE_STEMMING_PROMPT },
+      { role: "user", content: JSON.stringify(terms) },
+    ],
+    model || MODELS.QUERY_UNDERSTANDING,
+    { temperature: 0, max_tokens: 1024 }
+  );
+
+  let expansions: Record<string, string[]> = {};
+  try {
+    const cleaned = response.content.replace(/```json?\s*/g, "").replace(/```/g, "").trim();
+    const parsed = JSON.parse(cleaned);
+    expansions = parsed.terms || parsed;
+  } catch {
+    console.warn("Simple mode: stemming parse failed, using raw terms");
+    for (const t of terms) {
+      expansions[t] = [t];
+    }
+  }
+
+  // Ensure every original term is in its own expansion list
+  for (const t of terms) {
+    if (!expansions[t]) {
+      expansions[t] = [t];
+    } else if (!expansions[t].includes(t)) {
+      expansions[t].unshift(t);
+    }
+  }
+
+  return {
+    expansions,
+    cost: {
+      layer: "stemming",
+      model: response.model,
+      input_tokens: response.input_tokens,
+      output_tokens: response.output_tokens,
+      cost_usd: response.cost_usd,
+      latency_ms: response.latency_ms,
+    },
+  };
+}
+
+/**
+ * Simple search mode: boolean FTS with LLM pseudo-stemming.
+ * Skips vector search, RRF fusion, and LLM reranking.
+ * Uses ts_rank_cd for scoring (simple queries are selective enough).
+ */
+export async function searchBaseSimple(
+  userQuery: string,
+  filters?: SearchFilters,
+  onStatus?: (status: string) => void,
+  queryModel?: string,
+): Promise<SearchBaseResult> {
+  const startTime = Date.now();
+  const costs: CostEntry[] = [];
+  let totalTokens = 0;
+
+  // Step 1: Parse boolean query
+  onStatus?.("parsing_query");
+  const { terms, buildTsQuery: buildQuery } = parseBooleanQuery(userQuery);
+
+  // Step 2: LLM pseudo-stemming
+  onStatus?.("expanding_terms");
+  const { expansions, cost: stemmingCost } = await expandTermForms(terms, queryModel);
+  costs.push(stemmingCost);
+  totalTokens += stemmingCost.input_tokens + stemmingCost.output_tokens;
+
+  // Step 3: Build tsquery and execute ranked FTS
+  onStatus?.("searching");
+  const tsquery = buildQuery(expansions);
+
+  const mergedFilters: SearchFilters = { ...filters };
+
+  const supabase = createAdminClient();
+  const dbSearchStart = Date.now();
+  const { data, error } = await supabase.rpc("search_chunks_fts", {
+    search_query: tsquery,
+    match_count: 200,
+    filter_type: mergedFilters.document_type || null,
+    filter_decision: mergedFilters.decision_type || null,
+    filter_date_from: mergedFilters.date_from || null,
+    filter_date_to: mergedFilters.date_to || null,
+  });
+
+  let ftsResults: ChunkResult[] = [];
+  let ftsTimedOut = false;
+
+  if (error?.message?.includes("statement timeout")) {
+    console.warn("Simple mode: ranked FTS timeout, trying unranked");
+    ftsTimedOut = true;
+    // Fallback to unranked
+    const { results, timedOut } = await ftsQueryUnranked(tsquery, mergedFilters, 1000);
+    ftsTimedOut = timedOut;
+    ftsResults = results;
+  } else if (error) {
+    throw new Error(`Simple FTS error: ${error.message}`);
+  } else {
+    ftsResults = mapFtsRows(data || []);
+  }
+
+  costs.push({
+    layer: "db_search",
+    model: "fts_ranked",
+    input_tokens: 0,
+    output_tokens: 0,
+    cost_usd: 0,
+    latency_ms: Date.now() - dbSearchStart,
+  });
+
+  // Step 4: Group by verdict (no keyword groups = no coverage boost)
+  const verdicts = groupByVerdict(ftsResults, 100);
+
+  const sygnaturaMap: Record<string, number> = {};
+  for (const v of verdicts) {
+    const normalizedKey = normalizeSygnatura(v.sygnatura);
+    sygnaturaMap[normalizedKey] = v.verdict_id;
+    if (v.sygnatura.includes("|")) {
+      for (const part of v.sygnatura.split("|")) {
+        const normalized = normalizeSygnatura(part);
+        if (normalized && !(normalized in sygnaturaMap)) {
+          sygnaturaMap[normalized] = v.verdict_id;
+        }
+      }
+    }
+  }
+
+  // Step 5: Envelopes for AI answer
+  const envelopes = ftsResults.length > 0
+    ? await fetchVerdictEnvelopes(ftsResults)
+    : [];
+
+  const summarizeChunks = (chunks: ChunkResult[]) =>
+    chunks.map((c) => ({
+      sygnatura: c.sygnatura,
+      section_label: c.section_label,
+      score: c.score,
+      chunk_text_preview: c.chunk_text.slice(0, 150),
+    }));
+
+  return {
+    query: userQuery,
+    semanticQuery: userQuery, // no semantic rephrasing in simple mode
+    verdicts,
+    sygnatura_map: sygnaturaMap,
+    fusedChunks: ftsResults,
+    envelopes,
+    costs,
+    totalTokens,
+    startTime,
+    debug: {
+      query_understanding: null,
+      fts_results: summarizeChunks(ftsResults),
+      vector_results: [],
+      fused_results: [],
+      reranked_results: [],
+      fts_query: tsquery,
+      fts_timed_out: ftsTimedOut,
+      answer_prompt: envelopes.length > 0 ? buildAnswerMessages(userQuery, userQuery, envelopes) : null,
+      simple_mode: {
+        original_query: userQuery,
+        parsed_terms: terms,
+        expansions,
+        tsquery,
+      },
+    },
+  };
+}
+
+// ============================================================
 // Streaming answer generation
 // ============================================================
 
@@ -1441,10 +1733,122 @@ export async function streamAnswer(
   semanticQuery: string,
   envelopes: VerdictEnvelope[],
   answerModel: string,
+  maxTokens: number = 8000,
 ): Promise<{ stream: ReadableStream<Uint8Array>; startTime: number }> {
   const messages = buildAnswerMessages(userQuery, semanticQuery, envelopes);
   return chatCompletionStream(messages, answerModel, {
     temperature: 0.2,
-    max_tokens: 8000,
+    max_tokens: maxTokens,
   });
+}
+
+/**
+ * Rebuild envelopes for a given set of verdict IDs and stream a new answer.
+ * Used when the user requests AI overview with more verdicts than the default 15.
+ */
+export async function regenerateEnvelopes(
+  verdictIds: number[],
+  tokenBudget: number,
+): Promise<VerdictEnvelope[]> {
+  const supabase = createAdminClient();
+
+  // Fetch all chunks for these verdicts
+  const { data: chunks, error } = await supabase
+    .from("chunks")
+    .select(`
+      id, verdict_id, section_label, chunk_position, total_chunks,
+      preamble, chunk_text
+    `)
+    .in("verdict_id", verdictIds)
+    .order("verdict_id")
+    .order("chunk_position");
+
+  if (error) throw new Error(`Failed to fetch chunks: ${error.message}`);
+
+  // Fetch verdict metadata
+  const { data: verdicts, error: vError } = await supabase
+    .from("verdicts")
+    .select("id, sygnatura, verdict_date, document_type_normalized, decision_type_normalized")
+    .in("id", verdictIds);
+
+  if (vError) throw new Error(`Failed to fetch verdicts: ${vError.message}`);
+
+  const verdictMap = new Map(verdicts?.map(v => [v.id, v]) || []);
+
+  // Build envelopes
+  const envelopes: VerdictEnvelope[] = [];
+  let totalTokens = 0;
+
+  for (const vid of verdictIds) {
+    const v = verdictMap.get(vid);
+    if (!v) continue;
+
+    const verdictChunks = (chunks || []).filter(c => c.verdict_id === vid);
+
+    // Pick matched chunks (first 3 non-supplementary, or first 3 overall)
+    const matchedChunks = verdictChunks
+      .filter(c => !["sentencja"].includes(c.section_label))
+      .slice(0, ENVELOPE_MAX_MATCHED_PER_VERDICT);
+
+    const matchedLabels = new Set(matchedChunks.map(c => c.section_label));
+
+    // Find supplementary sections
+    const sentencjaChunk = verdictChunks.find(c => c.section_label === "sentencja");
+    const sentencja = sentencjaChunk && !matchedLabels.has("sentencja")
+      ? sentencjaChunk.chunk_text : null;
+
+    const faktyChunk = verdictChunks.find(c => c.section_label === "uzasadnienie_fakty");
+    const supplementaryFakty = faktyChunk && !matchedLabels.has("uzasadnienie_fakty")
+      ? faktyChunk.chunk_text : null;
+
+    const rozważaniaChunk = verdictChunks.find(c => c.section_label === "uzasadnienie_rozważania");
+    const supplementaryRozważania = rozważaniaChunk && !matchedLabels.has("uzasadnienie_rozważania")
+      ? rozważaniaChunk.chunk_text : null;
+
+    // Estimate tokens
+    let envelopeTokens = 0;
+    for (const c of matchedChunks) envelopeTokens += estimateTokens(c.chunk_text);
+    if (sentencja) envelopeTokens += estimateTokens(sentencja);
+    if (supplementaryFakty) envelopeTokens += estimateTokens(supplementaryFakty);
+    if (supplementaryRozważania) envelopeTokens += estimateTokens(supplementaryRozważania);
+
+    if (totalTokens + envelopeTokens > tokenBudget && envelopes.length > 0) break;
+    totalTokens += envelopeTokens;
+
+    envelopes.push({
+      verdict_id: vid,
+      sygnatura: v.sygnatura,
+      verdict_date: v.verdict_date,
+      document_type_normalized: v.document_type_normalized,
+      decision_type_normalized: v.decision_type_normalized,
+      sentencja,
+      matched_chunks: matchedChunks.map(c => ({
+        chunk_text: c.chunk_text,
+        section_label: c.section_label,
+        chunk_position: c.chunk_position,
+        total_chunks: c.total_chunks,
+        score: 0,
+      })),
+      supplementary_fakty: supplementaryFakty,
+      supplementary_rozważania: supplementaryRozważania,
+    });
+  }
+
+  return envelopes;
+}
+
+/**
+ * Estimate the cost of regenerating with N verdicts.
+ * Returns { inputTokens, outputTokens, costUsd } for the given model.
+ */
+export function estimateRegenerationCost(
+  verdictCount: number,
+  answerModel: string,
+): { inputTokens: number; outputTokens: number; costUsd: number } {
+  // ~7,000 tokens per verdict envelope (matched chunks + sentencja + fakty + rozważania) + ~2,000 base
+  const inputTokens = 2_000 + verdictCount * 7_000;
+  // Output scales: ~500 tokens per verdict, capped at 32K
+  const outputTokens = Math.min(Math.max(8_000, verdictCount * 500), 32_000);
+  const costUsd = estimateCost(answerModel, inputTokens, outputTokens);
+  return { inputTokens, outputTokens, costUsd };
 }

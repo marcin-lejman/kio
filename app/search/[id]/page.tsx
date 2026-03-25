@@ -12,6 +12,7 @@ import {
 import { AddToFolderDialog } from "@/components/folders/AddToFolderDialog";
 import type {
   SearchFilters,
+  SearchMode,
   VerdictResult,
   SearchMetadataType,
   DebugData,
@@ -38,22 +39,34 @@ interface SavedSearch {
 // Progressive search status UI
 // ---------------------------------------------------------------------------
 
-const STATUS_LABELS: Record<string, string> = {
-  query_understanding: "Przygotowuję zapytania do bazy danych",
-  searching: "Przeszukuję bazę danych",
-  reranking: "Udoskonalam wyniki",
+const STATUS_LABELS: Record<string, Record<string, string>> = {
+  intelligent: {
+    query_understanding: "Przygotowuję zapytania do bazy danych",
+    searching: "Przeszukuję bazę danych",
+    reranking: "Udoskonalam wyniki",
+  },
+  simple: {
+    parsing_query: "Analizuję zapytanie",
+    expanding_terms: "Generuję formy fleksyjne",
+    searching: "Przeszukuję bazę danych",
+  },
 };
 
-const STATUS_ORDER = ["query_understanding", "searching", "reranking"];
+const STATUS_ORDERS: Record<string, string[]> = {
+  intelligent: ["query_understanding", "searching", "reranking"],
+  simple: ["parsing_query", "expanding_terms", "searching"],
+};
 
-function SearchProgress({ currentStep }: { currentStep: string }) {
-  const currentIndex = STATUS_ORDER.indexOf(currentStep);
+function SearchProgress({ currentStep, mode = "intelligent" }: { currentStep: string; mode?: string }) {
+  const statusOrder = STATUS_ORDERS[mode] || STATUS_ORDERS.intelligent;
+  const labels = STATUS_LABELS[mode] || STATUS_LABELS.intelligent;
+  const currentIndex = statusOrder.indexOf(currentStep);
 
   return (
     <div className="flex flex-col items-center justify-center py-16 gap-4">
       <div className="h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent" />
       <div className="flex flex-col gap-2">
-        {STATUS_ORDER.map((key, i) => {
+        {statusOrder.map((key, i) => {
           const isDone = currentIndex >= 0 && i < currentIndex;
           const isCurrent = i === currentIndex;
 
@@ -87,7 +100,7 @@ function SearchProgress({ currentStep }: { currentStep: string }) {
               ) : (
                 <span className="inline-block h-2 w-2 rounded-full bg-muted/20 ml-1 mr-1 flex-shrink-0" />
               )}
-              {STATUS_LABELS[key]}
+              {labels[key]}
             </div>
           );
         })}
@@ -112,6 +125,7 @@ export default function SearchResultPage() {
     query: string;
     filters: SearchFilters;
     answerModel: string;
+    searchMode?: SearchMode;
   } | null | undefined>(undefined);
 
   if (isPending && pendingDataRef.current === undefined) {
@@ -132,8 +146,11 @@ export default function SearchResultPage() {
   const [pageLoading, setPageLoading] = useState(!isPending);
 
   // Search execution state
+  const [activeSearchMode, setActiveSearchMode] = useState<SearchMode>(
+    pendingDataRef.current?.searchMode || "intelligent"
+  );
   const [searchStatus, setSearchStatus] = useState<string | null>(
-    isPending ? "query_understanding" : null
+    isPending ? (pendingDataRef.current?.searchMode === "simple" ? "parsing_query" : "query_understanding") : null
   );
   const [searchError, setSearchError] = useState<string | null>(null);
 
@@ -156,7 +173,9 @@ export default function SearchResultPage() {
 
   const [visibleCount, setVisibleCount] = useState(15);
   const [showAddToFolder, setShowAddToFolder] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const regenAbortRef = useRef<AbortController | null>(null);
   const pendingSearchIdRef = useRef<number | null>(null);
 
   const isLive = liveVerdicts !== null;
@@ -167,12 +186,13 @@ export default function SearchResultPage() {
   // ------------------------------------------------------------------
 
   const executeSearch = useCallback(
-    async (query: string, filters: SearchFilters, answerModel: string) => {
+    async (query: string, filters: SearchFilters, answerModel: string, searchMode: SearchMode = "intelligent") => {
       abortRef.current?.abort();
       const abort = new AbortController();
       abortRef.current = abort;
 
-      setSearchStatus("query_understanding");
+      setActiveSearchMode(searchMode);
+      setSearchStatus(searchMode === "simple" ? "parsing_query" : "query_understanding");
       setSearchError(null);
       setLiveVerdicts(null);
       setLiveSygnaturaMap(null);
@@ -194,6 +214,7 @@ export default function SearchResultPage() {
             query,
             filters,
             answer_model: answerModel,
+            search_mode: searchMode,
           }),
           signal: abort.signal,
         });
@@ -306,7 +327,7 @@ export default function SearchResultPage() {
     }
 
     sessionStorage.removeItem("pending_search");
-    executeSearch(data.query, data.filters || {}, data.answerModel || "");
+    executeSearch(data.query, data.filters || {}, data.answerModel || "", data.searchMode || "intelligent");
 
     return () => {
       abortRef.current?.abort();
@@ -355,7 +376,7 @@ export default function SearchResultPage() {
   // ------------------------------------------------------------------
 
   const handleSearch = useCallback(
-    async (query: string, filters: SearchFilters, answerModel: string) => {
+    async (query: string, filters: SearchFilters, answerModel: string, searchMode: SearchMode = "intelligent") => {
       const syg = parseSygnatura(query);
       if (syg) {
         setSearchStatus("query_understanding");
@@ -375,9 +396,120 @@ export default function SearchResultPage() {
         }
       }
 
-      executeSearch(query, filters, answerModel);
+      executeSearch(query, filters, answerModel, searchMode);
     },
     [executeSearch, router]
+  );
+
+  // ------------------------------------------------------------------
+  // Regenerate AI answer with more verdicts
+  // ------------------------------------------------------------------
+
+  const handleRegenerate = useCallback(
+    async (verdictCount: number) => {
+      const currentVerdicts = isLive ? liveVerdicts : saved?.result_data?.verdicts;
+      if (!currentVerdicts || currentVerdicts.length === 0) return;
+
+      regenAbortRef.current?.abort();
+      const abort = new AbortController();
+      regenAbortRef.current = abort;
+
+      setRegenerating(true);
+      setLiveAiError(false);
+      setLiveUnresolvedRefs([]);
+      let firstToken = true;
+
+      const verdictIds = currentVerdicts.slice(0, verdictCount).map(v => v.verdict_id);
+      const model = pendingDataRef.current?.answerModel || saved?.answer_model || "";
+      const query = isLive ? (pendingDataRef.current?.query || "") : (saved?.query || "");
+
+      try {
+        const response = await fetch("/api/search/regenerate-answer", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            verdict_ids: verdictIds,
+            query,
+            answer_model: model,
+            verdict_count: verdictCount,
+          }),
+          signal: abort.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error("Regeneration failed");
+        }
+
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let currentEvent = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (line.startsWith("event: ")) {
+              currentEvent = line.slice(7);
+            } else if (line.startsWith("data: ")) {
+              try {
+                const parsed = JSON.parse(line.slice(6));
+                if (currentEvent === "token") {
+                  if (firstToken) {
+                    setLiveAiOverview(parsed);
+                    firstToken = false;
+                  } else {
+                    setLiveAiOverview((prev) => (prev || "") + parsed);
+                  }
+                } else if (currentEvent === "done") {
+                  if (parsed.ai_overview != null) {
+                    setLiveAiOverview(parsed.ai_overview);
+                  }
+                  if (parsed.answer_prompt) {
+                    setLiveDebug((prev) => prev ? {
+                      ...prev,
+                      answer_prompt: parsed.answer_prompt,
+                    } : prev);
+                  }
+                  if (parsed.metadata) {
+                    setLiveMetadata((prev) => {
+                      if (!prev) return parsed.metadata;
+                      // Append regeneration cost to existing costs
+                      return {
+                        ...prev,
+                        time_ms: prev.time_ms + parsed.metadata.time_ms,
+                        tokens_used: prev.tokens_used + parsed.metadata.tokens_used,
+                        cost_usd: prev.cost_usd + parsed.metadata.cost_usd,
+                        costs: [...prev.costs, ...parsed.metadata.costs],
+                      };
+                    });
+                  }
+                } else if (currentEvent === "error") {
+                  setLiveAiError(true);
+                }
+              } catch {
+                // skip
+              }
+            }
+          }
+        }
+      } catch (err) {
+        if (!abort.signal.aborted) {
+          setLiveAiError(true);
+          console.error("Regeneration error:", err);
+        }
+      } finally {
+        if (!abort.signal.aborted) {
+          setRegenerating(false);
+        }
+      }
+    },
+    [isLive, liveVerdicts, saved]
   );
 
   // ------------------------------------------------------------------
@@ -452,6 +584,9 @@ export default function SearchResultPage() {
   const searchBarModel = isPending
     ? pendingDataRef.current?.answerModel || undefined
     : saved?.answer_model || undefined;
+  const searchBarMode = isPending
+    ? pendingDataRef.current?.searchMode || undefined
+    : undefined;
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-8">
@@ -463,12 +598,13 @@ export default function SearchResultPage() {
           initialQuery={searchBarQuery}
           initialFilters={searchBarFilters}
           initialModel={searchBarModel}
+          initialSearchMode={searchBarMode}
         />
       </div>
 
       {/* Progressive search status */}
       {isSearching && searchStatus && (
-        <SearchProgress currentStep={searchStatus} />
+        <SearchProgress currentStep={searchStatus} mode={activeSearchMode} />
       )}
 
       {/* Search error */}
@@ -517,6 +653,12 @@ export default function SearchResultPage() {
             sygnaturaMap={sygnaturaMap}
             unresolvedRefs={isLive ? liveUnresolvedRefs : undefined}
             onSaveToFolder={() => setShowAddToFolder(true)}
+            totalResults={verdicts.length}
+            answerModel={
+              (isPending ? pendingDataRef.current?.answerModel : saved?.answer_model) || undefined
+            }
+            onRegenerate={handleRegenerate}
+            regenerating={regenerating}
           />
 
           {debug && <DebugPanel debug={debug} />}
@@ -530,7 +672,10 @@ export default function SearchResultPage() {
               <VerdictCard
                 key={verdict.verdict_id}
                 verdict={verdict}
-                keywords={debug?.query_understanding?.keywords}
+                keywords={
+                  debug?.query_understanding?.keywords
+                  || (debug?.simple_mode ? Object.values(debug.simple_mode.expansions).flat() : undefined)
+                }
               />
             ))}
           </div>

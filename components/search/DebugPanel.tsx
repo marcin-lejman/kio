@@ -42,11 +42,29 @@ export function DebugPanel({ debug }: { debug: DebugData }) {
             ))}
           </div>
 
-          {section === "query" && debug.query_understanding && (
+          {section === "query" && (debug.query_understanding || debug.simple_mode) && (
             <div>
-              <pre className="text-xs bg-white rounded p-2 overflow-x-auto whitespace-pre-wrap border border-orange-200">
+              {debug.query_understanding && (
+                <pre className="text-xs bg-white rounded p-2 overflow-x-auto whitespace-pre-wrap border border-orange-200">
 {JSON.stringify(debug.query_understanding, null, 2)}
-              </pre>
+                </pre>
+              )}
+              {debug.simple_mode && (
+                <div className="space-y-2">
+                  <div>
+                    <h4 className="text-xs font-semibold text-orange-900 mb-1">Parsed Terms</h4>
+                    <pre className="text-xs bg-white rounded p-2 overflow-x-auto whitespace-pre-wrap border border-orange-200">
+{JSON.stringify(debug.simple_mode.parsed_terms, null, 2)}
+                    </pre>
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-semibold text-orange-900 mb-1">Expanded Forms (LLM pseudo-stemming)</h4>
+                    <pre className="text-xs bg-white rounded p-2 overflow-x-auto whitespace-pre-wrap border border-orange-200 max-h-48 overflow-y-auto">
+{JSON.stringify(debug.simple_mode.expansions, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              )}
               {debug.fts_query && (
                 <div className="mt-2">
                   <h4 className="text-xs font-semibold text-orange-900 mb-1">FTS Query String</h4>
