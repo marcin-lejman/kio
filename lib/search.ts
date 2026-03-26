@@ -95,7 +95,7 @@ export interface CostEntry {
 // ============================================================
 
 const ENVELOPE_MAX_VERDICTS = 15;
-const ENVELOPE_TOKEN_BUDGET = 40_000;
+const ENVELOPE_TOKEN_BUDGET = 120_000; // ~8K per verdict × 15 verdicts
 const ENVELOPE_MAX_MATCHED_PER_VERDICT = 3;
 
 interface VerdictEnvelopeChunk {
