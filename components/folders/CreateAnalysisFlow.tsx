@@ -499,7 +499,7 @@ export function CreateAnalysisFlow({
               </span>
               {metadata && (
                 <span className="ml-auto text-[11px] text-muted">
-                  {metadata.tokens_used.toLocaleString()} tokenów · ${metadata.cost_usd.toFixed(4)} · {(metadata.latency_ms / 1000).toFixed(1)}s
+                  {metadata.tokens_used.toLocaleString()} tokenów · {metadata.cost_usd.toFixed(4).replace(".", ",")} USD · {(metadata.latency_ms / 1000).toFixed(1)}s
                 </span>
               )}
             </div>

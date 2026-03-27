@@ -44,7 +44,7 @@ export function AnalysisCard({
                 <span>{new Date(analysis.created_at).toLocaleDateString("pl-PL")}</span>
                 <span>{analysis.verdict_ids.length} orzeczeń</span>
                 {analysis.cost_usd != null && analysis.cost_usd > 0 && (
-                  <span>${analysis.cost_usd.toFixed(4)}</span>
+                  <span>{analysis.cost_usd.toFixed(4).replace(".", ",")} USD</span>
                 )}
               </div>
               <p className="mt-1 text-xs text-muted">

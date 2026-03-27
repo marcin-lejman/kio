@@ -36,7 +36,29 @@ export async function GET(
     return NextResponse.json({ error: "Nie znaleziono analizy." }, { status: 404 });
   }
 
-  return NextResponse.json(analysis);
+  // Load follow-up conversation messages
+  const { data: conversations } = await supabase
+    .from("analysis_conversations")
+    .select("ordinal, role, content, cost_usd, input_tokens, output_tokens, latency_ms, created_at")
+    .eq("analysis_id", analysisIdNum)
+    .order("ordinal", { ascending: true });
+
+  // Build sygnatura map for verdict linking
+  let sygnaturaMap: Record<string, number> = {};
+  if (analysis.verdict_ids && analysis.verdict_ids.length > 0) {
+    const { data: verdicts } = await supabase
+      .from("verdicts")
+      .select("id, sygnatura")
+      .in("id", analysis.verdict_ids);
+    if (verdicts) {
+      for (const v of verdicts) {
+        sygnaturaMap[v.sygnatura] = v.id;
+        sygnaturaMap[v.sygnatura.replace(/\s+/g, " ").trim()] = v.id;
+      }
+    }
+  }
+
+  return NextResponse.json({ ...analysis, conversations: conversations || [], sygnatura_map: sygnaturaMap });
 }
 
 // DELETE — delete analysis

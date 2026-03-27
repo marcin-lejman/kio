@@ -104,7 +104,7 @@ export default function AdminPage() {
                   Łączny koszt
                 </p>
                 <p className="text-2xl font-semibold text-primary mt-1">
-                  ${summary.total_cost_usd.toFixed(2)}
+                  {summary.total_cost_usd.toFixed(2).replace(".", ",")} USD
                 </p>
                 <p className="text-xs text-muted mt-1">
                   ostatnie {summary.period_days} dni
@@ -167,7 +167,7 @@ export default function AdminPage() {
                           {data.output_tokens.toLocaleString()}
                         </td>
                         <td className="py-2 px-3 text-right font-mono text-xs">
-                          ${data.cost.toFixed(4)}
+                          {data.cost.toFixed(4).replace(".", ",")} USD
                         </td>
                       </tr>
                     ))}
@@ -210,7 +210,7 @@ export default function AdminPage() {
                             {data.tokens.toLocaleString()}
                           </td>
                           <td className="py-2 px-3 text-right font-mono text-xs">
-                            ${data.cost.toFixed(4)}
+                            {data.cost.toFixed(4).replace(".", ",")} USD
                           </td>
                         </tr>
                       ))}

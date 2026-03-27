@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { DebugData } from "./types";
 
-export function DebugPanel({ debug }: { debug: DebugData }) {
+export function DebugPanel({ debug, followUpPrompt }: { debug: DebugData; followUpPrompt?: { role: string; content: string }[] | null }) {
   const [open, setOpen] = useState(false);
   const [section, setSection] = useState<string>("query");
 
@@ -14,6 +14,7 @@ export function DebugPanel({ debug }: { debug: DebugData }) {
     { id: "fused", label: `Fused (${debug.fused_results?.length ?? 0})` },
     { id: "reranked", label: `Reranked (${debug.reranked_results?.length ?? 0})` },
     ...(debug.answer_prompt ? [{ id: "prompt", label: "Answer Prompt" }] : []),
+    ...(followUpPrompt ? [{ id: "followup", label: "Follow-up Prompt" }] : []),
   ];
 
   return (
@@ -167,6 +168,23 @@ export function DebugPanel({ debug }: { debug: DebugData }) {
                 <div key={i}>
                   <h4 className="text-xs font-semibold text-orange-900 mb-1 uppercase">{msg.role}</h4>
                   <pre className="text-xs bg-white rounded p-2 overflow-x-auto whitespace-pre-wrap border border-orange-200">
+{msg.content}
+                  </pre>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {section === "followup" && followUpPrompt && (
+            <div className="space-y-2 max-h-[600px] overflow-y-auto">
+              {followUpPrompt.map((msg, i) => (
+                <div key={i}>
+                  <h4 className="text-xs font-semibold text-orange-900 mb-1 uppercase">
+                    {msg.role}
+                    {msg.role === "system" && " (cached)"}
+                    {msg.role === "user" && i === 1 && " — context (cached)"}
+                  </h4>
+                  <pre className="text-xs bg-white rounded p-2 overflow-x-auto whitespace-pre-wrap border border-orange-200 max-h-64 overflow-y-auto">
 {msg.content}
                   </pre>
                 </div>

@@ -223,7 +223,8 @@ export async function POST(
 
         const latencyMs = Date.now() - llmStart;
 
-        // Update analysis row
+        // Update analysis row (store context for follow-up conversations)
+        const userMessage = messages.find(m => m.role === "user");
         await supabase
           .from("folder_analyses")
           .update({
@@ -232,6 +233,7 @@ export async function POST(
             tokens_used: tokensUsed,
             cost_usd: costUsd,
             completed_at: new Date().toISOString(),
+            analysis_context: userMessage?.content || null,
           })
           .eq("id", analysisId);
 

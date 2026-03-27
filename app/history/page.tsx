@@ -146,7 +146,7 @@ export default function HistoryPage() {
                       {entry.tokens_used?.toLocaleString()}
                     </td>
                     <td className="py-2 px-3 text-right text-muted font-mono text-xs">
-                      ${entry.cost_usd?.toFixed(4)}
+                      {entry.cost_usd?.toFixed(4).replace(".", ",")} USD
                     </td>
                     <td className="py-2 px-3 text-right text-muted font-mono text-xs">
                       {(entry.latency_ms / 1000).toFixed(1)}s

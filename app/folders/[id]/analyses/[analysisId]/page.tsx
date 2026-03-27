@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { AnalysisMarkdown } from "@/components/folders/AnalysisMarkdown";
+import { FollowUpChat, SearchMetadata } from "@/components/search";
+import type { FollowUpMessage } from "@/components/search/FollowUpChat";
 import type { FolderAnalysis } from "@/components/folders/types";
 
 const statusLabels: Record<string, { label: string; color: string }> = {
@@ -19,12 +21,18 @@ export default function AnalysisDetailPage() {
   const folderId = params.id as string;
   const analysisId = params.analysisId as string;
 
-  const [analysis, setAnalysis] = useState<FolderAnalysis | null>(null);
+  const [analysis, setAnalysis] = useState<(FolderAnalysis & { conversations?: { ordinal: number; role: string; content: string; cost_usd?: number }[]; sygnatura_map?: Record<string, number> }) | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [copied, setCopied] = useState(false);
   const resultRef = useRef<HTMLDivElement>(null);
+
+  // Follow-up conversation state
+  const [followUpMessages, setFollowUpMessages] = useState<FollowUpMessage[]>([]);
+  const [followUpStreaming, setFollowUpStreaming] = useState(false);
+  const [followUpStreamContent, setFollowUpStreamContent] = useState("");
+  const followUpAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -33,6 +41,15 @@ export default function AnalysisDetailPage() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error);
         setAnalysis(data);
+        if (data.conversations && data.conversations.length > 0) {
+          setFollowUpMessages(
+            data.conversations.map((c: { role: string; content: string; cost_usd?: number }) => ({
+              role: c.role as "user" | "assistant",
+              content: c.content,
+              cost_usd: c.cost_usd ? Number(c.cost_usd) : undefined,
+            }))
+          );
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Nie znaleziono analizy.");
       } finally {
@@ -40,6 +57,85 @@ export default function AnalysisDetailPage() {
       }
     })();
   }, [folderId, analysisId]);
+
+  const executeFollowUp = useCallback(async (message: string) => {
+    followUpAbortRef.current?.abort();
+    const abort = new AbortController();
+    followUpAbortRef.current = abort;
+
+    setFollowUpMessages(prev => [...prev, { role: "user", content: message }]);
+    setFollowUpStreaming(true);
+    setFollowUpStreamContent("");
+
+    try {
+      const response = await fetch(`/api/folders/${folderId}/analyses/${analysisId}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+        signal: abort.signal,
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || "Follow-up failed");
+      }
+
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let currentEvent = "";
+      let fullContent = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (line.startsWith("event: ")) {
+            currentEvent = line.slice(7);
+          } else if (line.startsWith("data: ")) {
+            try {
+              const parsed = JSON.parse(line.slice(6));
+              if (currentEvent === "token") {
+                fullContent += parsed;
+                setFollowUpStreamContent(fullContent);
+              } else if (currentEvent === "done") {
+                setFollowUpMessages(prev => [
+                  ...prev,
+                  { role: "assistant", content: parsed.content || fullContent, cost_usd: parsed.cost_usd || 0 },
+                ]);
+              } else if (currentEvent === "error") {
+                setFollowUpMessages(prev => [
+                  ...prev,
+                  { role: "assistant", content: "", error: true },
+                ]);
+              }
+            } catch { /* skip */ }
+          }
+        }
+      }
+    } catch (err) {
+      if (abort.signal.aborted) return;
+      setFollowUpMessages(prev => [
+        ...prev,
+        { role: "assistant", content: "", error: true },
+      ]);
+      console.error("Analysis follow-up error:", err);
+    } finally {
+      if (!abort.signal.aborted) {
+        setFollowUpStreaming(false);
+        setFollowUpStreamContent("");
+      }
+    }
+  }, [folderId, analysisId]);
+
+  useEffect(() => {
+    return () => { followUpAbortRef.current?.abort(); };
+  }, []);
 
   const handleDelete = async () => {
     try {
@@ -94,49 +190,10 @@ export default function AnalysisDetailPage() {
           <div className="flex items-center gap-3 mt-1 text-xs text-muted">
             <span>{new Date(analysis.created_at).toLocaleDateString("pl-PL")}</span>
             <span>{analysis.verdict_ids.length} orzeczeń</span>
-            {analysis.tokens_used && (
-              <span>{analysis.tokens_used.toLocaleString()} tokenów</span>
-            )}
-            {analysis.cost_usd && (
-              <span>${analysis.cost_usd.toFixed(4)}</span>
-            )}
-            {analysis.completed_at && analysis.created_at && (
-              <span>
-                {((new Date(analysis.completed_at).getTime() - new Date(analysis.created_at).getTime()) / 1000).toFixed(1)}s
-              </span>
-            )}
           </div>
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          {analysis.result && (
-            <button
-              onClick={async () => {
-                if (!resultRef.current) return;
-                try {
-                  const html = resultRef.current.innerHTML;
-                  const plain = resultRef.current.innerText;
-                  await navigator.clipboard.write([
-                    new ClipboardItem({
-                      "text/html": new Blob([html], { type: "text/html" }),
-                      "text/plain": new Blob([plain], { type: "text/plain" }),
-                    }),
-                  ]);
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 2000);
-                } catch {
-                  // Fallback to plain text
-                  const plain = resultRef.current.innerText;
-                  await navigator.clipboard.writeText(plain);
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 2000);
-                }
-              }}
-              className="px-3 py-1.5 text-xs border border-border rounded hover:border-accent/30 hover:text-accent transition-colors cursor-pointer"
-            >
-              {copied ? "Skopiowano!" : "Kopiuj"}
-            </button>
-          )}
           <button
             onClick={() => setShowDeleteConfirm(true)}
             className="px-3 py-1.5 text-xs text-error hover:bg-error/5 border border-error/30 rounded transition-colors cursor-pointer"
@@ -145,6 +202,25 @@ export default function AnalysisDetailPage() {
           </button>
         </div>
       </div>
+
+      {/* Metadata — right-aligned above questions, matches search results layout */}
+      {analysis.completed_at && analysis.created_at && (
+        <div className="mb-4 flex justify-end">
+          <SearchMetadata metadata={{
+            time_ms: new Date(analysis.completed_at).getTime() - new Date(analysis.created_at).getTime(),
+            tokens_used: analysis.tokens_used || 0,
+            cost_usd: analysis.cost_usd ? Number(analysis.cost_usd) : 0,
+            costs: [{
+              layer: "folder_analysis",
+              model: analysis.model || "",
+              input_tokens: 0,
+              output_tokens: 0,
+              cost_usd: analysis.cost_usd ? Number(analysis.cost_usd) : 0,
+              latency_ms: new Date(analysis.completed_at).getTime() - new Date(analysis.created_at).getTime(),
+            }],
+          }} />
+        </div>
+      )}
 
       {/* Questions */}
       <div className="rounded-lg border border-border bg-card p-4 mb-6">
@@ -168,8 +244,58 @@ export default function AnalysisDetailPage() {
 
       {/* Result */}
       {analysis.result && (
-        <div className="rounded-lg border border-accent/20 bg-card p-6" ref={resultRef}>
-          <AnalysisMarkdown content={analysis.result} />
+        <div className="rounded-lg border border-accent/30 bg-card p-4 mb-6">
+          {/* Header row — matches AIOverview */}
+          <div className="flex items-center gap-2 mb-3">
+            <span className="inline-block h-2 w-2 rounded-full bg-accent flex-shrink-0" />
+            <span className="text-xs font-medium text-accent uppercase tracking-wide">
+              Analiza AI
+            </span>
+            <div className="ml-auto">
+              <button
+                onClick={async () => {
+                  if (!resultRef.current) return;
+                  try {
+                    const html = resultRef.current.innerHTML;
+                    const plain = resultRef.current.innerText;
+                    await navigator.clipboard.write([
+                      new ClipboardItem({
+                        "text/html": new Blob([html], { type: "text/html" }),
+                        "text/plain": new Blob([plain], { type: "text/plain" }),
+                      }),
+                    ]);
+                  } catch {
+                    if (resultRef.current) {
+                      await navigator.clipboard.writeText(resultRef.current.innerText);
+                    }
+                  }
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                }}
+                className="flex items-center gap-1.5 rounded-md border border-accent/30 bg-accent/5 px-2.5 py-1 text-[11px] font-medium text-accent hover:bg-accent/10 transition-colors cursor-pointer"
+              >
+                {copied ? "Skopiowano!" : "Kopiuj"}
+              </button>
+            </div>
+          </div>
+          <div className="ai-overview text-sm leading-relaxed" ref={resultRef}>
+            <AnalysisMarkdown content={analysis.result} sygnaturaMap={analysis.sygnatura_map} />
+          </div>
+        </div>
+      )}
+
+      {/* Follow-up conversation */}
+      {analysis.result && analysis.status === "completed" && (
+        <div className="mb-6">
+          <FollowUpChat
+            messages={followUpMessages}
+            streaming={followUpStreaming}
+            streamContent={followUpStreamContent}
+            onSend={executeFollowUp}
+            sygnaturaMap={analysis.sygnatura_map || {}}
+            disabled={false}
+            onRetry={executeFollowUp}
+          />
         </div>
       )}
 

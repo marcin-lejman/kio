@@ -4,6 +4,7 @@ const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
+  cache_control?: { type: "ephemeral" };
 }
 
 export interface LLMResponse {
@@ -22,6 +23,7 @@ export const MODELS = {
   // Layer 3: Answer generation options
   ANSWER_GENERATION: "anthropic/claude-sonnet-4.6",
   ANSWER_GENERATION_FAST: "google/gemini-3.1-flash-lite-preview",
+  //ANSWER_GENERATION_FAST: "stepfun/step-3.5-flash:free",
   ANSWER_GENERATION_PRO: "google/gemini-3.1-pro-preview",
   ANSWER_GENERATION_GPT: "openai/gpt-5.4",
   // Embeddings
@@ -152,7 +154,11 @@ const COST_TABLE: Record<string, { input: number; output: number }> = {
   "openai/text-embedding-3-large": { input: 0.13, output: 0 },
 };
 
-export function estimateCost(model: string, inputTokens: number, outputTokens: number): number {
+export function estimateCost(model: string, inputTokens: number, outputTokens: number, cacheReadTokens?: number): number {
   const rates = COST_TABLE[model] || { input: 1, output: 3 };
+  if (cacheReadTokens && model.startsWith("anthropic/")) {
+    const normalInput = inputTokens - cacheReadTokens;
+    return (normalInput * rates.input + cacheReadTokens * rates.input * 0.1 + outputTokens * rates.output) / 1_000_000;
+  }
   return (inputTokens * rates.input + outputTokens * rates.output) / 1_000_000;
 }

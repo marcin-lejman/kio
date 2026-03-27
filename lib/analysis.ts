@@ -324,6 +324,44 @@ export function buildAnalysisMessages(
 
 // ── Sygnatura map builder ──
 
+const ANALYSIS_FOLLOW_UP_INSTRUCTION = `\n\nKONTEKST ROZMOWY: Użytkownik zadaje pytania dodatkowe dotyczące wcześniej dostarczonej analizy. Odpowiadaj na konkretne pytanie, odwołując się do tych samych orzeczeń. Jeśli pytanie wykracza poza dostarczony materiał, powiedz to wprost. Zachowuj te same zasady cytowania sygnatur.`;
+
+export function buildAnalysisFollowUpMessages(
+  userContent: string,
+  initialAnswer: string,
+  conversationHistory: { role: "user" | "assistant"; content: string }[],
+  newQuestion: string,
+  answerModel: string,
+): ChatMessage[] {
+  const isAnthropic = answerModel.startsWith("anthropic/");
+  const cacheControl = isAnthropic ? { cache_control: { type: "ephemeral" as const } } : {};
+
+  return [
+    {
+      role: "system" as const,
+      content: ANALYSIS_PROMPT + ANALYSIS_FOLLOW_UP_INSTRUCTION,
+      ...cacheControl,
+    },
+    {
+      role: "user" as const,
+      content: userContent,
+      ...cacheControl,
+    },
+    {
+      role: "assistant" as const,
+      content: initialAnswer,
+    },
+    ...conversationHistory.map(msg => ({
+      role: msg.role as "user" | "assistant",
+      content: msg.content,
+    })),
+    {
+      role: "user" as const,
+      content: newQuestion,
+    },
+  ];
+}
+
 export function buildSygnaturaMap(contexts: AnalysisVerdictContext[]): Record<string, number> {
   const map: Record<string, number> = {};
   for (const ctx of contexts) {

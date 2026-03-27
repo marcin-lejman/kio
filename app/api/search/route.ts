@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { searchBase, searchBaseSimple, streamAnswer, type CostEntry } from "@/lib/search";
+import { searchBase, searchBaseSimple, streamAnswer, buildAnswerContext, buildCitableList, type CostEntry } from "@/lib/search";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { MODELS, estimateCost } from "@/lib/openrouter";
 import { rateLimit } from "@/lib/rate-limit";
@@ -151,6 +151,8 @@ export async function POST(request: NextRequest) {
                 answer_model: selectedModel,
                 search_mode: search_mode || "intelligent",
                 metadata: finalMetadata,
+                answer_context: buildAnswerContext(base.envelopes),
+                citable_list: buildCitableList(base.envelopes),
               });
 
               send("done", {
@@ -345,6 +347,8 @@ async function saveSearchHistory(result: {
   answer_model: string;
   search_mode: string;
   metadata: { time_ms: number; tokens_used: number; cost_usd: number; costs: unknown[] };
+  answer_context?: string | null;
+  citable_list?: string[] | null;
 }): Promise<number | null> {
   try {
     const supabase = createAdminClient();
@@ -368,6 +372,8 @@ async function saveSearchHistory(result: {
           debug: result.debug,
           metadata: result.metadata,
           search_mode: result.search_mode,
+          ...(result.answer_context ? { answer_context: result.answer_context } : {}),
+          ...(result.citable_list ? { citable_list: result.citable_list } : {}),
         },
       })
       .select("id")

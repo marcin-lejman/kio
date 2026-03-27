@@ -1,5 +1,5 @@
 import { createAdminClient } from "./supabase/admin";
-import { chatCompletion, chatCompletionStream, embedText, estimateCost, MODELS, type LLMResponse } from "./openrouter";
+import { chatCompletion, chatCompletionStream, embedText, estimateCost, MODELS, type LLMResponse, type ChatMessage } from "./openrouter";
 
 // ============================================================
 // Types
@@ -1199,7 +1199,7 @@ function normalizeSygnatura(s: string): string {
   return s.replace(/\s+/g, " ").replace(/\s*\/\s*/g, "/").trim();
 }
 
-function buildCitableList(envelopes: VerdictEnvelope[]): string[] {
+export function buildCitableList(envelopes: VerdictEnvelope[]): string[] {
   const set = new Set<string>();
   for (const env of envelopes) {
     if (env.sygnatura.includes("|")) {
@@ -1214,7 +1214,7 @@ function buildCitableList(envelopes: VerdictEnvelope[]): string[] {
   return [...set];
 }
 
-function buildAnswerContext(envelopes: VerdictEnvelope[]): string {
+export function buildAnswerContext(envelopes: VerdictEnvelope[]): string {
   return envelopes
     .map((env, i) => {
       const sygLabel = env.sygnatura.includes("|")
@@ -1266,6 +1266,48 @@ export function buildAnswerMessages(userQuery: string, semanticQuery: string, en
       content: `Pytanie użytkownika: ${userQuery}\n\nZapytanie semantyczne: ${semanticQuery}\n\nLiczba dostarczonych orzeczeń: ${count}\n\nOrzeczenia KIO:\n\n${context}\n\n========================================\nBIAŁA LISTA SYGNATUR — JEDYNE sygnatury, które możesz cytować:\n${citableList.map(s => `• ${s}`).join("\n")}\n========================================\nUWAGA: Jakiekolwiek odwołanie do sygnatury SPOZA powyższej listy jest niedopuszczalne.`,
     },
   ];
+}
+
+const FOLLOW_UP_INSTRUCTION = `\n\nKONTEKST ROZMOWY: Użytkownik zadaje pytania dodatkowe dotyczące wcześniej dostarczonej analizy. Odpowiadaj na konkretne pytanie, odwołując się do tych samych orzeczeń. Jeśli pytanie wykracza poza dostarczony materiał, powiedz to wprost. Zachowuj te same zasady cytowania sygnatur.`;
+
+export function buildFollowUpMessages(
+  userQuery: string,
+  answerContext: string,
+  citableList: string[],
+  initialAnswer: string,
+  conversationHistory: { role: "user" | "assistant"; content: string }[],
+  newQuestion: string,
+  answerModel: string,
+): ChatMessage[] {
+  const isAnthropic = answerModel.startsWith("anthropic/");
+  const cacheControl = isAnthropic ? { cache_control: { type: "ephemeral" as const } } : {};
+
+  const messages: ChatMessage[] = [
+    {
+      role: "system" as const,
+      content: ANSWER_GENERATION_PROMPT + FOLLOW_UP_INSTRUCTION,
+      ...cacheControl,
+    },
+    {
+      role: "user" as const,
+      content: `Pytanie użytkownika: ${userQuery}\n\nOrzeczenia KIO:\n\n${answerContext}\n\n========================================\nBIAŁA LISTA SYGNATUR — JEDYNE sygnatury, które możesz cytować:\n${citableList.map(s => `• ${s}`).join("\n")}\n========================================\nUWAGA: Jakiekolwiek odwołanie do sygnatury SPOZA powyższej listy jest niedopuszczalne.`,
+      ...cacheControl,
+    },
+    {
+      role: "assistant" as const,
+      content: initialAnswer,
+    },
+    ...conversationHistory.map(msg => ({
+      role: msg.role as "user" | "assistant",
+      content: msg.content,
+    })),
+    {
+      role: "user" as const,
+      content: newQuestion,
+    },
+  ];
+
+  return messages;
 }
 
 // ============================================================

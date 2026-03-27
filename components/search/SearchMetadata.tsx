@@ -29,7 +29,7 @@ export function SearchMetadata({ metadata }: { metadata: SearchMetadataType }) {
         <div className="mt-1 flex flex-col gap-0.5 items-end">
           <div className="flex items-center gap-2">
             <span>{metadata.tokens_used.toLocaleString()} tokenów</span>
-            {hasCost && <span>${metadata.cost_usd.toFixed(4)}</span>}
+            {hasCost && <span>{metadata.cost_usd.toFixed(4).replace(".", ",")} USD</span>}
           </div>
           {metadata.costs.length > 0 && (
             <div className="flex items-center gap-2 font-mono flex-wrap justify-end">

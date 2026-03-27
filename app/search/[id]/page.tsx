@@ -8,7 +8,9 @@ import {
   VerdictCard,
   DebugPanel,
   SearchMetadata,
+  FollowUpChat,
 } from "@/components/search";
+import type { FollowUpMessage } from "@/components/search";
 import { AddToFolderDialog } from "@/components/folders/AddToFolderDialog";
 import type {
   SearchFilters,
@@ -34,6 +36,7 @@ interface SavedSearch {
     search_mode?: string;
   } | null;
   created_at: string;
+  conversations?: { ordinal: number; role: string; content: string; cost_usd?: number }[];
 }
 
 // ---------------------------------------------------------------------------
@@ -179,6 +182,15 @@ export default function SearchResultPage() {
   const regenAbortRef = useRef<AbortController | null>(null);
   const pendingSearchIdRef = useRef<number | null>(null);
 
+  // Follow-up conversation state
+  const [followUpMessages, setFollowUpMessages] = useState<FollowUpMessage[]>([]);
+  const [followUpStreaming, setFollowUpStreaming] = useState(false);
+  const [followUpStreamContent, setFollowUpStreamContent] = useState("");
+  const [followUpPrompt, setFollowUpPrompt] = useState<{ role: string; content: string }[] | null>(null);
+  const followUpAbortRef = useRef<AbortController | null>(null);
+  // Track the resolved search ID (survives the pending→saved URL transition)
+  const resolvedSearchIdRef = useRef<number | null>(isPending ? null : parseInt(searchId, 10) || null);
+
   const isLive = liveVerdicts !== null;
   const isSearching = searchStatus !== null;
 
@@ -204,6 +216,9 @@ export default function SearchResultPage() {
       setLiveMetadata(null);
       setLiveDebug(null);
       setVisibleCount(15);
+      setFollowUpMessages([]);
+      setFollowUpStreamContent("");
+      setFollowUpPrompt(null);
 
       let hasReceivedResults = false;
 
@@ -270,6 +285,7 @@ export default function SearchResultPage() {
                   setLiveMetadata(parsed.metadata);
                   if (parsed.search_id) {
                     pendingSearchIdRef.current = parsed.search_id;
+                    resolvedSearchIdRef.current = parsed.search_id;
                   }
                 } else if (currentEvent === "error") {
                   setSearchStatus(null);
@@ -356,6 +372,16 @@ export default function SearchResultPage() {
         }
         const data: SavedSearch = await res.json();
         setSaved(data);
+        // Load saved conversation messages
+        if (data.conversations && data.conversations.length > 0) {
+          setFollowUpMessages(
+            data.conversations.map(c => ({
+              role: c.role as "user" | "assistant",
+              content: c.content,
+              cost_usd: c.cost_usd ? Number(c.cost_usd) : undefined,
+            }))
+          );
+        }
       } catch {
         setLoadError("Nie udało się załadować wyników.");
       } finally {
@@ -418,6 +444,9 @@ export default function SearchResultPage() {
       setRegenerating(true);
       setLiveAiError(false);
       setLiveUnresolvedRefs([]);
+      setFollowUpMessages([]);
+      setFollowUpStreamContent("");
+      setFollowUpPrompt(null);
       let firstToken = true;
 
       const verdictIds = currentVerdicts.slice(0, verdictCount).map(v => v.verdict_id);
@@ -512,6 +541,130 @@ export default function SearchResultPage() {
     },
     [isLive, liveVerdicts, saved]
   );
+
+  // ------------------------------------------------------------------
+  // Follow-up conversation
+  // ------------------------------------------------------------------
+
+  const executeFollowUp = useCallback(
+    async (message: string) => {
+      const currentSearchId = resolvedSearchIdRef.current;
+      if (!currentSearchId) return;
+
+      followUpAbortRef.current?.abort();
+      const abort = new AbortController();
+      followUpAbortRef.current = abort;
+
+      // Optimistically add user message
+      setFollowUpMessages(prev => [...prev, { role: "user", content: message }]);
+      setFollowUpStreaming(true);
+      setFollowUpStreamContent("");
+
+      try {
+        const response = await fetch(`/api/search/${currentSearchId}/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message }),
+          signal: abort.signal,
+        });
+
+        if (!response.ok) {
+          const err = await response.json();
+          throw new Error(err.error || "Follow-up failed");
+        }
+
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let currentEvent = "";
+        let fullContent = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (line.startsWith("event: ")) {
+              currentEvent = line.slice(7);
+            } else if (line.startsWith("data: ")) {
+              try {
+                const parsed = JSON.parse(line.slice(6));
+                if (currentEvent === "token") {
+                  fullContent += parsed;
+                  setFollowUpStreamContent(fullContent);
+                } else if (currentEvent === "done") {
+                  const content = parsed.content || fullContent;
+                  setFollowUpMessages(prev => [
+                    ...prev,
+                    {
+                      role: "assistant",
+                      content,
+                      cost_usd: parsed.cost_usd || 0,
+                    },
+                  ]);
+                  // Update metadata with accumulated cost
+                  if (parsed.cost_usd) {
+                    setLiveMetadata(prev => {
+                      if (!prev) return prev;
+                      return {
+                        ...prev,
+                        tokens_used: prev.tokens_used + (parsed.input_tokens || 0) + (parsed.output_tokens || 0),
+                        cost_usd: prev.cost_usd + parsed.cost_usd,
+                        costs: [...prev.costs, {
+                          layer: "follow_up_chat",
+                          model: "",
+                          input_tokens: parsed.input_tokens || 0,
+                          output_tokens: parsed.output_tokens || 0,
+                          cost_usd: parsed.cost_usd,
+                          latency_ms: parsed.latency_ms || 0,
+                        }],
+                      };
+                    });
+                  }
+                  if (parsed.follow_up_prompt) {
+                    setFollowUpPrompt(parsed.follow_up_prompt);
+                  }
+                } else if (currentEvent === "error") {
+                  // Replace the optimistic user message's expected answer with error
+                  setFollowUpMessages(prev => [
+                    ...prev,
+                    { role: "assistant", content: "", error: true },
+                  ]);
+                }
+              } catch {
+                // skip
+              }
+            }
+          }
+        }
+      } catch (err) {
+        if (abort.signal.aborted) return;
+        // Add error response
+        setFollowUpMessages(prev => [
+          ...prev,
+          { role: "assistant", content: "", error: true },
+        ]);
+        console.error("Follow-up error:", err);
+      } finally {
+        if (!abort.signal.aborted) {
+          setFollowUpStreaming(false);
+          setFollowUpStreamContent("");
+        }
+      }
+    },
+    [] // resolvedSearchIdRef is a ref, stable across renders
+  );
+
+  // Abort follow-up on unmount
+  useEffect(() => {
+    return () => {
+      followUpAbortRef.current?.abort();
+    };
+  }, []);
 
   // ------------------------------------------------------------------
   // Render: loading saved search
@@ -662,7 +815,20 @@ export default function SearchResultPage() {
             regenerating={regenerating}
           />
 
-          {debug && <DebugPanel debug={debug} />}
+          {/* Follow-up conversation */}
+          {!aiStreaming && !regenerating && aiOverview && !aiError && (
+            <FollowUpChat
+              messages={followUpMessages}
+              streaming={followUpStreaming}
+              streamContent={followUpStreamContent}
+              onSend={executeFollowUp}
+              sygnaturaMap={sygnaturaMap}
+              disabled={isSearching || aiStreaming || regenerating}
+              onRetry={executeFollowUp}
+            />
+          )}
+
+          {debug && <DebugPanel debug={debug} followUpPrompt={followUpPrompt} />}
 
           <p className="text-sm text-muted">
             Znaleziono {verdicts.length} orzeczeń
